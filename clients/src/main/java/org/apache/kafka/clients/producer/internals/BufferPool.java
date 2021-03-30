@@ -43,11 +43,15 @@ import org.apache.kafka.common.utils.Time;
  */
 public final class BufferPool {
 
+    //总的内存缓冲区大小。默认是32M
     private final long totalMemory;
+    //batch 大小，默认16Kb
     private final int poolableSize;
     private final ReentrantLock lock;
+    //队列缓存了一批内存空间，用来复用
     private final Deque<ByteBuffer> free;
     private final Deque<Condition> waiters;
+    //剩下可用的内存空间大小
     private long availableMemory;
     private final Metrics metrics;
     private final Time time;
@@ -88,36 +92,48 @@ public final class BufferPool {
      * @throws InterruptedException If the thread is interrupted while blocked
      * @throws IllegalArgumentException if size is larger than the total memory controlled by the pool (and hence we would block
      *         forever)
+     * 总的内存缓冲区大小=剩余可用缓冲区大小+BufferPool内存大小+dp 队列 batch 内存大小
      */
     public ByteBuffer allocate(int size, long maxTimeToBlockMs) throws InterruptedException {
+        //需要分配的内存大小大于总的缓冲区大小则抛异常
         if (size > this.totalMemory)
             throw new IllegalArgumentException("Attempt to allocate " + size
                                                + " bytes, but there is a hard limit of "
                                                + this.totalMemory
                                                + " on memory allocations.");
 
+        //申请内存空间需要加锁
         this.lock.lock();
         try {
             // check if we have a free buffer of the right size pooled
+            //如果需要申请的内存大小是batchSize，并且BufferPool有内存，直接复用
             if (size == poolableSize && !this.free.isEmpty())
                 return this.free.pollFirst();
 
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
+            //计算BufferPool内存大小
             int freeListSize = this.free.size() * this.poolableSize;
+            //缓冲区剩余可使用内存大小+BufferPool内存大小=可分配总的缓冲区>需要分配的 size 内存大小
             if (this.availableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request
+                //确保内存空间足够分配 size 内存大小
                 freeUp(size);
+                //计算剩余可用内存空间
                 this.availableMemory -= size;
                 lock.unlock();
+                //通过 nio 分配堆内存
                 return ByteBuffer.allocate(size);
             } else {
+                //总的内存缓存空间不足，需要阻塞等待 batch 成功发送后释放内存空间
                 // we are out of memory and will have to block
                 int accumulated = 0;
                 ByteBuffer buffer = null;
                 Condition moreMemory = this.lock.newCondition();
+                //最大阻塞等待时间
                 long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
+                //放入到队列中
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
@@ -126,6 +142,7 @@ public final class BufferPool {
                     long timeNs;
                     boolean waitingTimeElapsed;
                     try {
+                        //阻塞等待有 batch 被发送成功，内存清空后会通知此处唤醒
                         waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException e) {
                         this.waiters.remove(moreMemory);
@@ -144,6 +161,9 @@ public final class BufferPool {
                     remainingTimeToBlockNs -= timeNs;
                     // check if we can satisfy this request from the free list,
                     // otherwise allocate memory
+
+                    //如果 batch 释放后，对应BufferPool内存大小有可复用的内存空间，则直接使用
+                    //否则进行内存直接分配
                     if (accumulated == 0 && size == this.poolableSize && !this.free.isEmpty()) {
                         // just grab a buffer from the free list
                         buffer = this.free.pollFirst();
@@ -189,6 +209,7 @@ public final class BufferPool {
      * buffers (if needed)
      */
     private void freeUp(int size) {
+        //释放BufferPool的内存空间，增加剩余可用内存空间，直到足够分配需要的 size 内存大小
         while (!this.free.isEmpty() && this.availableMemory < size)
             this.availableMemory += this.free.pollLast().capacity();
     }

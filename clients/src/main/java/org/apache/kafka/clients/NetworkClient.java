@@ -145,17 +145,25 @@ public class NetworkClient implements KafkaClient {
      * @param node The node to check
      * @param now The current timestamp
      * @return True if we are ready to send to the given node
+     * 有一个broker的连接状态，是有一个设计模式在里面，状态机的模式，类似于我们一直说的那个状态模式，抽取和封装一个组件的多个状态，
+     * 然后通过一个状态机管理组件，可以让这个状态可以互相流转
+     *
+     * null，CONNECTING，CONNECTED，DISCONNECTED，针对不同的状态，还可以做不同的事情，
+     * 如果是null就可以发起连接，如果连接成功，就可以进入已连接的状态，如果中间发生连接的故障，就进入连接失败
      */
     @Override
     public boolean ready(Node node, long now) {
         if (node.isEmpty())
             throw new IllegalArgumentException("Cannot connect to empty node " + node);
 
+        //判断 Broker 连接是否可以发送数据
         if (isReady(node, now))
             return true;
 
+        //判断是否可以跟 Broker 建立连接
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
+            //同 Broker 发起网络连接
             initiateConnect(node, now);
 
         return false;
@@ -212,6 +220,8 @@ public class NetworkClient implements KafkaClient {
     public boolean isReady(Node node, long now) {
         // if we need to update our metadata now declare all requests unready to make metadata requests first
         // priority
+        //判断元数据是否正在更新
+        //判断Broker连接状态以及是否可以发送数据
         return !metadataUpdater.isUpdateDue(now) && canSendRequest(node.idString());
     }
 
@@ -221,6 +231,8 @@ public class NetworkClient implements KafkaClient {
      * @param node The node
      */
     private boolean canSendRequest(String node) {
+        //broker 节点的网络状态是否已经连接
+        //Selector上要注册很多Channel，每个Channel就代表了跟一个Broker建立的连接
         return connectionStates.isConnected(node) && selector.isChannelReady(node) && inFlightRequests.canSendMore(node);
     }
 
@@ -238,8 +250,15 @@ public class NetworkClient implements KafkaClient {
         doSend(request, now);
     }
 
+    /**
+     * 发送数据
+     * @param request
+     * @param now
+     */
     private void doSend(ClientRequest request, long now) {
         request.setSendTimeMs(now);
+        //将请求添加到inFlightRequests中的队列
+        //max.in.flight.requests.per.connection：最多允许发送给同一个 broker 的请求有多少没有返回响应
         this.inFlightRequests.add(request);
         selector.send(request.request());
     }
@@ -255,6 +274,7 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public List<ClientResponse> poll(long timeout, long now) {
+        //metadataUpdater是更新元数据组件
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
@@ -266,6 +286,7 @@ public class NetworkClient implements KafkaClient {
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
         handleCompletedSends(responses, updatedNow);
+        //接收到 broker 响应后执行回调操作
         handleCompletedReceives(responses, updatedNow);
         handleDisconnections(responses, updatedNow);
         handleConnections();
@@ -447,6 +468,7 @@ public class NetworkClient implements KafkaClient {
             String source = receive.source();
             ClientRequest req = inFlightRequests.completeNext(source);
             Struct body = parseResponse(receive.payload(), req.request().header());
+            //处理已经完成的响应
             if (!metadataUpdater.maybeHandleCompletedReceive(req, now, body))
                 responses.add(new ClientResponse(req, now, false, body));
         }
@@ -489,12 +511,15 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Initiate a connection to the given node
+     * 初始化 broker 连接
      */
     private void initiateConnect(Node node, long now) {
         String nodeConnectionId = node.idString();
         try {
             log.debug("Initiating connection to node {} at {}:{}.", node.id(), node.host(), node.port());
+            //修改连接状态，状态机概念
             this.connectionStates.connecting(nodeConnectionId, now);
+            //建立 broker连接
             selector.connect(nodeConnectionId,
                              new InetSocketAddress(node.host(), node.port()),
                              this.socketSendBuffer,
@@ -532,6 +557,7 @@ public class NetworkClient implements KafkaClient {
 
         @Override
         public boolean isUpdateDue(long now) {
+            //元数据正在更新或者即将要更新
             return !this.metadataFetchInProgress && this.metadata.timeToNextUpdate(now) == 0;
         }
 
@@ -549,6 +575,7 @@ public class NetworkClient implements KafkaClient {
                 // Beware that the behavior of this method and the computation of timeouts for poll() are
                 // highly dependent on the behavior of leastLoadedNode.
                 Node node = leastLoadedNode(now);
+                //发送消息到 broker 获取元数据
                 maybeUpdate(now, node);
             }
 
@@ -579,6 +606,7 @@ public class NetworkClient implements KafkaClient {
         public boolean maybeHandleCompletedReceive(ClientRequest req, long now, Struct body) {
             short apiKey = req.request().header().apiKey();
             if (apiKey == ApiKeys.METADATA.id && req.isInitiatedByNetworkClient()) {
+                //执行回调
                 handleResponse(req.request().header(), body, now);
                 return true;
             }
@@ -602,6 +630,7 @@ public class NetworkClient implements KafkaClient {
             // don't update the cluster if there are no valid nodes...the topic we want may still be in the process of being
             // created which means we will get errors and no nodes until it exists
             if (cluster.nodes().size() > 0) {
+                //更新 cluster 集群数据
                 this.metadata.update(cluster, now);
             } else {
                 log.trace("Ignoring empty metadata response with correlation id {}.", header.correlationId());
@@ -631,6 +660,7 @@ public class NetworkClient implements KafkaClient {
 
             if (canSendRequest(nodeConnectionId)) {
                 this.metadataFetchInProgress = true;
+                //封装请求，发送到 broker拉取元数据
                 MetadataRequest metadataRequest;
                 if (metadata.needMetadataForAllTopics())
                     metadataRequest = MetadataRequest.allTopics();
@@ -638,6 +668,7 @@ public class NetworkClient implements KafkaClient {
                     metadataRequest = new MetadataRequest(new ArrayList<>(metadata.topics()));
                 ClientRequest clientRequest = request(now, nodeConnectionId, metadataRequest);
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node.id());
+                //底层发送逻辑
                 doSend(clientRequest, now);
             } else if (connectionStates.canConnect(nodeConnectionId, now)) {
                 // we don't have a connection to this node right now, make one

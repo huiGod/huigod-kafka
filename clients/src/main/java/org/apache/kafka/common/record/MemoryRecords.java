@@ -95,9 +95,13 @@ public class MemoryRecords implements Records {
             throw new IllegalStateException("Memory records is not writable");
 
         int size = Record.recordSize(key, value);
+        //先写offset
         compressor.putLong(offset);
+        //再写消息大小
         compressor.putInt(size);
+        //实际写入消息数据 crc|magic|attributes|timestamp|key size|key|value size|value
         long crc = compressor.putRecord(timestamp, key, value);
+        //更新 batch 中的消息数和总大小
         compressor.recordWritten(size + Records.LOG_OVERHEAD);
         return crc;
     }
@@ -118,6 +122,7 @@ public class MemoryRecords implements Records {
         if (!this.writable)
             return false;
 
+        //batch 总内存大小>=batch已经写入的内存大小+当前要写入的消息大小
         return this.compressor.numRecordsWritten() == 0 ?
             this.initialCapacity >= Records.LOG_OVERHEAD + Record.recordSize(key, value) :
             this.writeLimit >= this.compressor.estimatedBytesWritten() + Records.LOG_OVERHEAD + Record.recordSize(key, value);

@@ -30,12 +30,19 @@ import java.util.Set;
 public final class Cluster {
 
     private final boolean isBootstrapConfigured;
+    //表示 broker 节点
     private final List<Node> nodes;
+    //未授权访问的 topic列表
     private final Set<String> unauthorizedTopics;
+    //每个topic+partition对应的具体分区详细信息
     private final Map<TopicPartition, PartitionInfo> partitionsByTopicPartition;
+    //每个topic对应所有的 partition 信息
     private final Map<String, List<PartitionInfo>> partitionsByTopic;
+    //每个topic有哪些当前可用的分区，如果某个分区没有leader是存活的，此时那个分区就不可用了
     private final Map<String, List<PartitionInfo>> availablePartitionsByTopic;
+    //每个 broker 对应的分区信息
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
+    //brokerid 对应的 broker 节点
     private final Map<Integer, Node> nodesById;
 
     /**

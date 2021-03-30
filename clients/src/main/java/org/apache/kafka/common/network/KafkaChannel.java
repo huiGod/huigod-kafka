@@ -119,9 +119,12 @@ public class KafkaChannel {
     }
 
     public void setSend(Send send) {
+        //每个 Channel 只能同时发送一个 send 数据
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
+        //赋值需要发送的数据
         this.send = send;
+        //将 Selector 关注写数据（因为此时需要发送数据）
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 

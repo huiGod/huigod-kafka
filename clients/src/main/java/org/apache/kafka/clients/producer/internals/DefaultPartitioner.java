@@ -68,6 +68,7 @@ public class DefaultPartitioner implements Partitioner {
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
         int numPartitions = partitions.size();
+        //没有指定 key，则通过计数轮询分区
         if (keyBytes == null) {
             int nextValue = counter.getAndIncrement();
             List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
@@ -79,6 +80,7 @@ public class DefaultPartitioner implements Partitioner {
                 return DefaultPartitioner.toPositive(nextValue) % numPartitions;
             }
         } else {
+            //有指定 key，则计算后取模获取指定分区
             // hash the keyBytes to choose a partition
             return DefaultPartitioner.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
         }

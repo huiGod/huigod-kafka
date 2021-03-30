@@ -129,6 +129,7 @@ public class Sender implements Runnable {
         log.debug("Starting Kafka producer I/O thread.");
 
         // main loop, runs until close is called
+        //标志位用 volatile 修饰，保证可见性
         while (running) {
             try {
                 run(time.milliseconds());
@@ -172,9 +173,11 @@ public class Sender implements Runnable {
     void run(long now) {
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
+        //获取已经准备好可以发送 batch 的Partition Leader所在的 broker 机器节点列表
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        // 如果有 leader Partition 未知，则更新元数据拉取标识
         if (result.unknownLeadersExist)
             this.metadata.requestUpdate();
 
@@ -183,13 +186,17 @@ public class Sender implements Runnable {
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            //判断 Broker连接是否准备好并且可以发送数据
             if (!this.client.ready(node, now)) {
+                //剔除未准备好要发送数据的 broker
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.connectionDelay(node, now));
             }
         }
 
         // create produce requests
+        //封装需要发送的所有 batch
+        //brokerId,List<batch>
         Map<Integer, List<RecordBatch>> batches = this.accumulator.drain(cluster,
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,
@@ -202,12 +209,14 @@ public class Sender implements Runnable {
             }
         }
 
+        //清除已经超时发送的 batch
         List<RecordBatch> expiredBatches = this.accumulator.abortExpiredBatches(this.requestTimeout, now);
         // update sensors
         for (RecordBatch expiredBatch : expiredBatches)
             this.sensors.recordErrors(expiredBatch.topicPartition.topic(), expiredBatch.recordCount);
 
         sensors.updateProduceRequestMetrics(batches);
+        //将需要发送的 batch 数据针对每个 broker封装为一个ClientRequest
         List<ClientRequest> requests = createProduceRequests(batches, now);
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
         // loop and try sending more data. Otherwise, the timeout is determined by nodes that have partitions with data
@@ -219,9 +228,11 @@ public class Sender implements Runnable {
             log.trace("Created {} produce requests: {}", requests.size(), requests);
             pollTimeout = 0;
         }
+        //通过 nio对每个 broker  都发送ClientRequest数据
         for (ClientRequest request : requests)
             client.send(request, now);
 
+        // pollTimeout时间的计算逻辑
         // if some partitions are already ready to be sent, the select time would be 0;
         // otherwise if some partition already has some data accumulated but not ready yet,
         // the select time will be the time difference between now and its linger expiry time;

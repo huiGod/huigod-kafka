@@ -154,6 +154,17 @@ public final class Record {
         }
     }
 
+    /**
+     * 消息的具体格式
+     * @param compressor
+     * @param crc
+     * @param attributes
+     * @param timestamp
+     * @param key
+     * @param value
+     * @param valueOffset
+     * @param valueSize
+     */
     public static void write(Compressor compressor, long crc, byte attributes, long timestamp, byte[] key, byte[] value, int valueOffset, int valueSize) {
         // write crc
         compressor.putInt((int) (crc & 0xffffffffL));

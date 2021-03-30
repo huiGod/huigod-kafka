@@ -91,6 +91,14 @@ public class Compressor {
     public float compressionRate;
     public long maxTimestamp;
 
+    /**
+     * ByteBufferOutputStream包裹了ByteBuffer，持有一个针对ByteBuffer的输出流，
+     * 接着会把ByteBufferOutputStream给包裹在一个压缩流里，gzip、lz4、snappy，如果是包裹在压缩流里，写入的时候会先进入压缩流的缓冲区
+     *
+     * 压缩流会把一条消息放在缓冲区里，用压缩算法给压缩了，再写入底层的ByteBufferOutputStream里去
+     * @param buffer
+     * @param type
+     */
     public Compressor(ByteBuffer buffer, CompressionType type) {
         this.type = type;
         this.initPos = buffer.position();
@@ -107,7 +115,9 @@ public class Compressor {
         }
 
         // create the stream
+        //内存数据由输出流ByteBufferOutputStream封装
         bufferStream = new ByteBufferOutputStream(buffer);
+        //bufferStream最终会依据压缩方式再次封装
         appendStream = wrapForOutput(bufferStream, type, COMPRESSION_DEFAULT_BUFFER_SIZE);
     }
 
@@ -203,8 +213,11 @@ public class Compressor {
     public long putRecord(long timestamp, byte[] key, byte[] value, CompressionType type,
                           int valueOffset, int valueSize) {
         // put a record as un-compressed into the underlying stream
+        //计算消息crc
         long crc = Record.computeChecksum(timestamp, key, value, type, valueOffset, valueSize);
+        //处理消息压缩方式
         byte attributes = Record.computeAttributes(type);
+        //写入消息数据
         putRecord(crc, attributes, timestamp, key, value, valueOffset, valueSize);
         return crc;
     }

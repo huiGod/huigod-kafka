@@ -74,15 +74,24 @@ import org.slf4j.LoggerFactory;
  * various getters. These are reset by each call to <code>poll()</code>.
  *
  * This class is not thread safe!
+ *
+ * Selector内部的源码一定要带着大家深入到每个细节的研究，因为这是完全经历过全世界大量的、复杂的、大规模的场景考验的一套网络通信的框架，基于NIO封装的一套网络通信的框架
+ *
+ * 里面的涉及到的很多的细节和机制，都是代表了工业级、企业级的网络通信的设计
  */
 public class Selector implements Selectable {
 
     private static final Logger log = LoggerFactory.getLogger(Selector.class);
 
+    //封装了原生的Java NIO的Selector，多路复用组件，一个线程调用他直接监听多个网络连接的请求和响应
     private final java.nio.channels.Selector nioSelector;
+    //broker id到Channel的映射关系。每个broker都有一个网络连接，每个连接在NIO的语义里，都有一个对应的SocketChannel，KafkaChannel封装了SocketChannel
     private final Map<String, KafkaChannel> channels;
+    //已经成功发送出去的请求
     private final List<Send> completedSends;
+    //已经接收回来的响应而且被处理完了
     private final List<NetworkReceive> completedReceives;
+    //每个Broker的收到的但是还没有被处理的响应
     private final Map<KafkaChannel, Deque<NetworkReceive>> stagedReceives;
     private final Set<SelectionKey> immediatelyConnectedKeys;
     private final List<String> disconnected;
@@ -94,7 +103,9 @@ public class Selector implements Selectable {
     private final Map<String, String> metricTags;
     private final ChannelBuilder channelBuilder;
     private final Map<String, Long> lruConnections;
+    //每个网络连接最多可以空闲的时间的大小，就要回收掉
     private final long connectionsMaxIdleNanos;
+    //最大可以接收的数据量的大小
     private final int maxReceiveSize;
     private final boolean metricsPerConnection;
     private long currentTimeNanos;
@@ -148,23 +159,39 @@ public class Selector implements Selectable {
      * @param receiveBufferSize The receive buffer for the new connection
      * @throws IllegalStateException if there is already a connection for that id
      * @throws IOException if DNS resolution fails on the hostname or if the broker is down
+     * 使用 nio 发起网络连接的工业级使用方法
+     *
+     * TCP/IP协议中,无论发送多少数据,总是要在数据前面加上协议头,同时,对方接收到数据,也需要发送ACK表示确认.
+     * 为了尽可能的利用网络带宽,TCP总是希望尽可能的发送足够大的数据.(在一个连接中会设置MSS参数,
+     * 因此,TCP/IP希望每次都能够以MSS尺寸的数据块来发送数据).Nagle算法就是为了尽可能发送大块数据,避免网络中充斥着许多小数据块.
+     *
+     * Nagle算法的基本定义是任意时刻,最多只能有一个未被确认的小段. 所谓“小段”,指的是小于MSS尺寸的数据块,所谓“未被确认”,
+     * 是指一个数据块发送出去后,没有收到对方发送的ACK确认该数据已收到.
      */
     @Override
     public void connect(String id, InetSocketAddress address, int sendBufferSize, int receiveBufferSize) throws IOException {
+        //判断连接是否已经建立
         if (this.channels.containsKey(id))
             throw new IllegalStateException("There is already a connection for id " + id);
 
         SocketChannel socketChannel = SocketChannel.open();
+        //配置为非阻塞
         socketChannel.configureBlocking(false);
         Socket socket = socketChannel.socket();
+        //tcp 长连接开启心跳检测探测连接是否正常
         socket.setKeepAlive(true);
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
+            //设置 tcp 发送数据缓冲区
             socket.setSendBufferSize(sendBufferSize);
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
+            //设置 tcp 接收数据缓冲区
             socket.setReceiveBufferSize(receiveBufferSize);
+        //开启Nagle's算法
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
+            //创建网络连接
+            //一个channel在非阻塞模式下执行connect后，如果连接能马上建立好则返回true(连接本地可能会很快成功)，否则完成false。如果返回false，那么只能通过之后调用finishConnect来判断连接是否完成。
             connected = socketChannel.connect(address);
         } catch (UnresolvedAddressException e) {
             socketChannel.close();
@@ -173,9 +200,13 @@ public class Selector implements Selectable {
             socketChannel.close();
             throw e;
         }
+        //将创建的连接注册到 Selector 上，并且关注OP_CONNECT事件
         SelectionKey key = socketChannel.register(nioSelector, SelectionKey.OP_CONNECT);
+        //可以通过SelectionKey.key获取到 连接channel，最终封装为KafkaChannel
         KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize);
+        //后续可以通过attachment()方法获取到 KafkaChannel
         key.attach(channel);
+        //将连接缓存
         this.channels.put(id, channel);
 
         if (connected) {
@@ -228,8 +259,10 @@ public class Selector implements Selectable {
      * @param send The request to send
      */
     public void send(Send send) {
+        //获取 broker 连接对应的 channel
         KafkaChannel channel = channelOrFail(send.destination());
         try {
+            //将需要发送的数据跟 channel 所绑定
             channel.setSend(send);
         } catch (CancelledKeyException e) {
             this.failedSends.add(send.destination());

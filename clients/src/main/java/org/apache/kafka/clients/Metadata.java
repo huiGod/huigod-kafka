@@ -124,12 +124,18 @@ public final class Metadata {
         }
         long begin = System.currentTimeMillis();
         long remainingWaitMs = maxWaitMs;
+        //如果集群version大于传入的version，说明元数据有更新
         while (this.version <= lastVersion) {
             if (remainingWaitMs != 0)
+                //阻塞指定时间等待。这里会wait释放锁
+                //sender 线程在remainingWaitMs时间内把 topic 元数据加载到了，然后缓存到 Metadata 里去，
+                //更新 version 版本号，此时一定会唤醒这里的阻塞，让主线程直接返回
                 wait(remainingWaitMs);
+            //被唤醒后判断是否超时
             long elapsed = System.currentTimeMillis() - begin;
             if (elapsed >= maxWaitMs)
                 throw new TimeoutException("Failed to update metadata after " + maxWaitMs + " ms.");
+            //计算剩余可以等待时间
             remainingWaitMs = maxWaitMs - elapsed;
         }
     }
@@ -165,17 +171,21 @@ public final class Metadata {
      * Update the cluster metadata
      */
     public synchronized void update(Cluster cluster, long now) {
+        //更新标识位
         this.needUpdate = false;
+        //更新最新刷新元数据时间
         this.lastRefreshMs = now;
         this.lastSuccessfulRefreshMs = now;
+        //更新版本号
         this.version += 1;
 
         for (Listener listener: listeners)
             listener.onMetadataUpdate(cluster);
 
         // Do this after notifying listeners as subscribed topics' list can be changed by listeners
+        //是否需要一次性把所有的 topic 元数据都获取，默认是 false
         this.cluster = this.needMetadataForAllTopics ? getClusterForCurrentTopics(cluster) : cluster;
-
+        //更新完最新元数据后，唤醒其他等待获取元数据的线程
         notifyAll();
         log.debug("Updated cluster metadata version {} to {}", this.version, this.cluster);
     }

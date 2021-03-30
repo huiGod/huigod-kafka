@@ -38,8 +38,10 @@ final class ClusterConnectionStates {
     public boolean canConnect(String id, long now) {
         NodeConnectionState state = nodeState.get(id);
         if (state == null)
+            //表示从未建立过连接
             return true;
         else
+            //连接已经断开并且超过了重试间隔时间
             return state.state == ConnectionState.DISCONNECTED && now - state.lastConnectAttemptMs >= this.reconnectBackoffMs;
     }
 
