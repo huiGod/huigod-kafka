@@ -444,7 +444,7 @@ public final class RecordAccumulator {
                                         // request
                                         break;
                                     } else {
-                                        //如果当前 batch 可以发送，则
+                                        //如果当前 batch 可以发送，则从队列弹出队头batch
                                         RecordBatch batch = deque.pollFirst();
                                         //将batch底层ByteBuffer设置为只读
                                         batch.records.close();

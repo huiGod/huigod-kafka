@@ -195,8 +195,7 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
-        //封装需要发送的所有 batch
-        //brokerId,List<batch>
+        //封装需要发送的所有 batch，组装为brokerId,List<batch>
         Map<Integer, List<RecordBatch>> batches = this.accumulator.drain(cluster,
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,
