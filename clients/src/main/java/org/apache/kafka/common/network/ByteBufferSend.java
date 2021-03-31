@@ -54,9 +54,11 @@ public class ByteBufferSend implements Send {
 
     @Override
     public long writeTo(GatheringByteChannel channel) throws IOException {
+        //通过底层socketChannel.write 方法发送数据
         long written = channel.write(buffers);
         if (written < 0)
             throw new EOFException("Wrote negative bytes to channel. This shouldn't happen.");
+        //剩余未发送的数据长度
         remaining -= written;
         // This is temporary workaround. As Send , Receive interfaces are being used by BlockingChannel.
         // Once BlockingChannel is removed we can make Send, Receive to work with transportLayer rather than

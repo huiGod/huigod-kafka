@@ -167,6 +167,14 @@ public class Selector implements Selectable {
      *
      * Nagle算法的基本定义是任意时刻,最多只能有一个未被确认的小段. 所谓“小段”,指的是小于MSS尺寸的数据块,所谓“未被确认”,
      * 是指一个数据块发送出去后,没有收到对方发送的ACK确认该数据已收到.
+     *
+     * keepalive的意思，主要是避免客户端和服务端任何一方如果断开连接之后，别人不知道，一直保持着网络连接的资源；所以设置这个之后，
+     * 2小时内如果双方没有任何通信，那么发送一个探测包，根据探测包的结果保持连接、重新连接或者断开连接
+     *
+     * NetworkClient、Selector、KafkaChannel、ConnectStates，这些东西是极为值得我们来研究的，
+     * 对我们的技术底层的功底的夯实极为有好处，假设我们真的要去开发一个网络通信的程序，打算基于NIO来做
+     *
+     * 对于客户端而言，他的SocketChannel到底应该如何来设置呢？你就可以参考人家做法：KeepAlive、TcpNoDelay、SocketBuffer
      */
     @Override
     public void connect(String id, InetSocketAddress address, int sendBufferSize, int receiveBufferSize) throws IOException {
@@ -186,12 +194,13 @@ public class Selector implements Selectable {
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             //设置 tcp 接收数据缓冲区
             socket.setReceiveBufferSize(receiveBufferSize);
-        //开启Nagle's算法
+        //关闭Nagle's算法，让发送出去的数据包立即通过网络传输过去
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
             //创建网络连接
-            //一个channel在非阻塞模式下执行connect后，如果连接能马上建立好则返回true(连接本地可能会很快成功)，否则完成false。如果返回false，那么只能通过之后调用finishConnect来判断连接是否完成。
+            //一个channel在非阻塞模式下执行connect后，如果连接能马上建立好则返回true(连接本地可能会很快成功)，否则完成false
+            //如果返回false，那么只能通过之后调用finishConnect来判断连接是否完成。
             connected = socketChannel.connect(address);
         } catch (UnresolvedAddressException e) {
             socketChannel.close();
@@ -202,9 +211,10 @@ public class Selector implements Selectable {
         }
         //将创建的连接注册到 Selector 上，并且关注OP_CONNECT事件
         SelectionKey key = socketChannel.register(nioSelector, SelectionKey.OP_CONNECT);
-        //可以通过SelectionKey.key获取到 连接channel，最终封装为KafkaChannel
+        //可以通过SelectionKey.key获取到连接channel，最终封装为KafkaChannel
         KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize);
         //后续可以通过attachment()方法获取到 KafkaChannel
+        //后续在通过SelectionKey进行网络请求和相应的处理的时候，就可以从SelectionKey里获取出来SocketChannel
         key.attach(channel);
         //将连接缓存
         this.channels.put(id, channel);
@@ -307,12 +317,15 @@ public class Selector implements Selectable {
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
+        //调用底层nio 组件Selector.select，如果所有 socketChannel 都没有 IO 读写事件发生，最多阻塞指定时间
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         currentTimeNanos = endSelect;
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
 
+        //如果有任一个socketChannel有 IO 读写时间发生
         if (readyKeys > 0 || !immediatelyConnectedKeys.isEmpty()) {
+            //处理IO 读写事件具体逻辑
             pollSelectionKeys(this.nioSelector.selectedKeys(), false);
             pollSelectionKeys(immediatelyConnectedKeys, true);
         }
@@ -324,21 +337,35 @@ public class Selector implements Selectable {
         maybeCloseOldestConnection();
     }
 
+    /**
+     * 原生 NIO 读写处理逻辑
+     * @param selectionKeys
+     * @param isImmediatelyConnected
+     */
     private void pollSelectionKeys(Iterable<SelectionKey> selectionKeys, boolean isImmediatelyConnected) {
         Iterator<SelectionKey> iterator = selectionKeys.iterator();
+        //遍历所有有事件发生的SelectionKey
         while (iterator.hasNext()) {
             SelectionKey key = iterator.next();
+            //从集合中移除当前SelectionKey
             iterator.remove();
+            //在创建连接时，注册到Selector 后执行了attach操作。这里对应可以通过attachment来获取
             KafkaChannel channel = channel(key);
 
             // register all per-connection metrics at once
             sensors.maybeRegisterConnectionMetrics(channel.id());
+            //保存连接-->发生事件时的时间
+            //lruConnections，因为一般来说一个客户端不能放太多的Socket连接资源，否则会导致这个客户端的复杂过重，
+            //所以他需要采用lru的方式来不断的淘汰掉最近最少使用的一些连接，很多连接最近没怎么发送消息
             lruConnections.put(channel.id(), currentTimeNanos);
 
             try {
 
                 /* complete any connections that have finished their handshake (either normally or immediately) */
+                //如果发现SelectionKey当前处于的状态是可以建立连接，isConnectable方法是true
                 if (isImmediatelyConnected || key.isConnectable()) {
+                    //调用到KafkaChannel最底层的SocketChannel的finishConnect方法，等待这个连接必须执行完毕
+                    //连接创建成功，取消关注OP_CONNECT事件，并且关注OP_READ事件
                     if (channel.finishConnect()) {
                         this.connected.add(channel.id());
                         this.sensors.connectionCreated.record();
@@ -351,6 +378,7 @@ public class Selector implements Selectable {
                     channel.prepare();
 
                 /* if channel is ready read from any connections that have readable data */
+                //处理网络读事件
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     while ((networkReceive = channel.read()) != null)
@@ -358,6 +386,7 @@ public class Selector implements Selectable {
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
+                //处理网络写事件（发送请求）
                 if (channel.ready() && key.isWritable()) {
                     Send send = channel.write();
                     if (send != null) {

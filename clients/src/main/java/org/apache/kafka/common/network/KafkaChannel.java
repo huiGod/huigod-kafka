@@ -144,10 +144,18 @@ public class KafkaChannel {
         return result;
     }
 
+    /**
+     * 发送数据
+     * @return
+     * @throws IOException
+     */
     public Send write() throws IOException {
         Send result = null;
+        //当前 KafkaChannel 只能有一个 send待发送
         if (send != null && send(send)) {
+            //返回成功发送的 send 数据
             result = send;
+            //发送成功后清空当前 KafkaChannel的 send
             send = null;
         }
         return result;
@@ -157,8 +165,15 @@ public class KafkaChannel {
         return receive.readFrom(transportLayer);
     }
 
+    /**
+     * 返回数据是否发送完成
+     * @param send
+     * @return
+     * @throws IOException
+     */
     private boolean send(Send send) throws IOException {
         send.writeTo(transportLayer);
+        //如果数据发送完成，移除对OP_WRITE事件的关注
         if (send.completed())
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 
