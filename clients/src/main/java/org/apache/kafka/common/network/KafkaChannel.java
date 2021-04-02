@@ -33,7 +33,9 @@ public class KafkaChannel {
     private final TransportLayer transportLayer;
     private final Authenticator authenticator;
     private final int maxReceiveSize;
+    //对接收到数据的封装
     private NetworkReceive receive;
+    //对需要发送出去的数据封装
     private Send send;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Authenticator authenticator, int maxReceiveSize) throws IOException {
@@ -145,7 +147,10 @@ public class KafkaChannel {
     }
 
     /**
-     * 发送数据
+     * 发送数据逻辑
+     * 如果说已经发送完毕数据了，那么就可以取消对OP_WRITE事件的关注，
+     * 否则如果一个Request的数据都没发送完毕，此时还需要保持对OP_WRITE事件的关注,
+     * 而且如果发送完毕了，就会放到completedSends里面去
      * @return
      * @throws IOException
      */
@@ -158,6 +163,7 @@ public class KafkaChannel {
             //发送成功后清空当前 KafkaChannel的 send
             send = null;
         }
+        //返回已经成功发送的 send
         return result;
     }
 

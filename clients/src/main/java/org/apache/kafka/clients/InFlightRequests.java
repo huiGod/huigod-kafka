@@ -88,6 +88,7 @@ final class InFlightRequests {
         Deque<ClientRequest> queue = requests.get(node);
         //inFlightRequests，有一个参数可以设置这个东西，默认是对同一个Broker同一时间最多容忍5个请求发送过去但是还没有收到响应，
         //所以如果对一个Broker已经发送了5个请求，都没收到响应，此时就不可以继续发送了
+        //如果队列中队头元素存在但是没有发送完成（出现拆包），则返回 false
         return queue == null || queue.isEmpty() ||
                (queue.peekFirst().request().completed() && queue.size() < this.maxInFlightRequestsPerConnection);
     }

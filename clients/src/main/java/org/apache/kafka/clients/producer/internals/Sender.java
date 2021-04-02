@@ -187,6 +187,7 @@ public class Sender implements Runnable {
         while (iter.hasNext()) {
             Node node = iter.next();
             //判断 Broker连接是否准备好并且可以发送数据
+            //底层逻辑会有write发送数据时的拆包判断，如果发现拆包则返回 false，不会继续发送后续 ClientRequest请求，但是此时仍然关注着OP_WRITE事件，底层网络 IO 会继续发送剩余数据
             if (!this.client.ready(node, now)) {
                 //剔除未准备好要发送数据的 broker
                 iter.remove();

@@ -24,7 +24,9 @@ public class ByteBufferSend implements Send {
 
     private final String destination;
     private final int size;
+    //底层需要发送的数据
     protected final ByteBuffer[] buffers;
+    //buffers数组中剩余待发送的数据大小
     private int remaining;
     private boolean pending = false;
 
@@ -42,6 +44,10 @@ public class ByteBufferSend implements Send {
         return destination;
     }
 
+    /**
+     * 判断是否还有剩余数据需要发送
+     * @return
+     */
     @Override
     public boolean completed() {
         return remaining <= 0 && !pending;

@@ -339,6 +339,14 @@ public class Selector implements Selectable {
 
     /**
      * 原生 NIO 读写处理逻辑
+     * 梳理和总结一下，通过Kafka客户端源码的研究，对NIO的编程可以有非常好的认识和进步，就是完全掌握利用底层的NIO进行开发的技术，
+     * 对不同事件的监听和取消监听，是通过二进制位运算的方式来实现的
+     *
+     * 但是其实人家NIO是支持同时监听一个连接上的多种事件的，就是通过位运算的
+     *
+     * key.interestOps() & ~ SelectionKey.OP_READ | SelectionKey.OP_WRITE，底层的NIO网络编程里是非常有实践意义的
+     *
+     * 拆包、粘包的工业级解决方案
      * @param selectionKeys
      * @param isImmediatelyConnected
      */
@@ -378,7 +386,7 @@ public class Selector implements Selectable {
                     channel.prepare();
 
                 /* if channel is ready read from any connections that have readable data */
-                //处理网络读事件
+                //处理网络读事件（接收请求）
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     while ((networkReceive = channel.read()) != null)
@@ -387,9 +395,16 @@ public class Selector implements Selectable {
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
                 //处理网络写事件（发送请求）
+                //拆包现象：
+                //如果Kafka一个请求一次write操作没有把全部的数据都写到broker去，相当于出现了类似于拆包的问题，一个请求一次没法发送完毕，此时如何处理的呢？
+                //如果说一个请求对应的ByteBuffer中的二进制字节数据一次write没有全部发送完毕,底层ByteBufferSend的remaining是大于0，此时就不会取消对OP_WRITE事件的监听
+                //如果出现拆包，这里的 send 返回的是 null
+                //针对某个Broker，再次发送一个Request时，必须得先判断一下，这个Broker上一次发送的Request请求是否发送完毕了，并且还得限制为最多只发送5个request是没有收到响应的
+                //如果说上一次 request出现了类似拆包的问题，一次请求没有发送完毕，此时下次就不会继续往这个broker发送请求了，但是此时针对这个broker还是保持着OP_WRITE的监听，下次调用poll，会发现对这个broker可以再次执行WRITABLE事件
                 if (channel.ready() && key.isWritable()) {
                     Send send = channel.write();
                     if (send != null) {
+                        //send数据全部发送成功才会放入到completedSends队列
                         this.completedSends.add(send);
                         this.sensors.recordBytesSent(channel.id(), send.size());
                     }

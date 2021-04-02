@@ -157,6 +157,7 @@ public class NetworkClient implements KafkaClient {
             throw new IllegalArgumentException("Cannot connect to empty node " + node);
 
         //判断 Broker 连接是否可以发送数据
+        //底层会有write 数据拆包的判断逻辑
         if (isReady(node, now))
             return true;
 
@@ -285,14 +286,19 @@ public class NetworkClient implements KafkaClient {
         // process completed actions
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
+        //处理已经发送成功的后续操作
         handleCompletedSends(responses, updatedNow);
         //接收到 broker 响应后执行回调操作
         handleCompletedReceives(responses, updatedNow);
+        //处理连接断开
         handleDisconnections(responses, updatedNow);
+        //处理连接成功的节点
         handleConnections();
+        //处理超时请求
         handleTimedOutRequests(responses, updatedNow);
 
         // invoke callbacks
+        //执行消息回调
         for (ClientResponse response : responses) {
             if (response.request().hasCallback()) {
                 try {
@@ -449,7 +455,9 @@ public class NetworkClient implements KafkaClient {
     private void handleCompletedSends(List<ClientResponse> responses, long now) {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
+            //获取completedSends队列队头元素，一定是刚刚发送出去的数据
             ClientRequest request = this.inFlightRequests.lastSent(send.destination());
+            //通过acks计算是否需要等待请求的响应，如果不需要这里可以直接从inFlightRequests队列里面移出去
             if (!request.expectResponse()) {
                 this.inFlightRequests.completeLastSent(send.destination());
                 responses.add(new ClientResponse(request, now, false, null));
