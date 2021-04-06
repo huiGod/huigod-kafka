@@ -27,6 +27,7 @@ public class ByteBufferSend implements Send {
     //底层需要发送的数据
     protected final ByteBuffer[] buffers;
     //buffers数组中剩余待发送的数据大小
+    //在组装请求 request 时，会计算出remaining
     private int remaining;
     private boolean pending = false;
 

@@ -74,6 +74,13 @@ public class NetworkReceive implements Receive {
     // Need a method to read from ReadableByteChannel because BlockingChannel requires read with timeout
     // See: http://stackoverflow.com/questions/2866557/timeout-for-socketchannel-doesnt-work
     // This can go away after we get rid of BlockingChannel
+
+    /**
+     * size默认是4字节，读取一个 int 类型数据，代表下一次完整的请求体大小
+     * @param channel
+     * @return
+     * @throws IOException
+     */
     @Deprecated
     public long readFromReadableChannel(ReadableByteChannel channel) throws IOException {
         int read = 0;

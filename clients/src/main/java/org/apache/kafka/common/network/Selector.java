@@ -346,7 +346,10 @@ public class Selector implements Selectable {
      *
      * key.interestOps() & ~ SelectionKey.OP_READ | SelectionKey.OP_WRITE，底层的NIO网络编程里是非常有实践意义的
      *
-     * 拆包、粘包的工业级解决方案
+     * 拆包、粘包的工业级解决方案：
+     * send 数据出现拆包，继续关注OP_WRITE事件，继续发送数据
+     *
+     *
      * @param selectionKeys
      * @param isImmediatelyConnected
      */

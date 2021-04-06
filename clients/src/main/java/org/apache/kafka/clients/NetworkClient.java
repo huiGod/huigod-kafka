@@ -451,11 +451,13 @@ public class NetworkClient implements KafkaClient {
      *
      * @param responses The list of responses to update
      * @param now The current time
+     * 一个 kafkaChannel 只能绑定一个 send，因此一次 IO 处理流程，对同一个 broker 也一定只能发送一个 send
+     * 这里获取的inFlightRequests队列队头元素也一定是刚刚发送的 send
      */
     private void handleCompletedSends(List<ClientResponse> responses, long now) {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
-            //获取completedSends队列队头元素，一定是刚刚发送出去的数据
+            //获取completedSends队列队头元素，一定是刚刚发送出去的request数据
             ClientRequest request = this.inFlightRequests.lastSent(send.destination());
             //通过acks计算是否需要等待请求的响应，如果不需要这里可以直接从inFlightRequests队列里面移出去
             if (!request.expectResponse()) {

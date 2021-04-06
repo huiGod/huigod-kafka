@@ -138,11 +138,13 @@ public class KafkaChannel {
         }
 
         receive(receive);
+        //判断请求是否完整
         if (receive.complete()) {
             receive.payload().rewind();
             result = receive;
             receive = null;
         }
+        //发生拆包与粘包
         return result;
     }
 
@@ -178,6 +180,7 @@ public class KafkaChannel {
      * @throws IOException
      */
     private boolean send(Send send) throws IOException {
+        //如果发生拆包，下一次会接着继续写
         send.writeTo(transportLayer);
         //如果数据发送完成，移除对OP_WRITE事件的关注
         if (send.completed())
