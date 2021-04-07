@@ -100,6 +100,7 @@ public final class RecordBatch {
         // execute callbacks
         for (int i = 0; i < this.thunks.size(); i++) {
             try {
+                //回调batch中的每条消息thunk
                 Thunk thunk = this.thunks.get(i);
                 if (exception == null) {
                     // If the timestamp returned by server is NoTimestamp, that means CreateTime is used. Otherwise LogAppendTime is used.
@@ -116,6 +117,7 @@ public final class RecordBatch {
                 log.error("Error executing user-provided callback on message for topic-partition {}:", topicPartition, e);
             }
         }
+        //batch的结果回调
         this.produceFuture.done(topicPartition, baseOffset, exception);
     }
 
@@ -155,7 +157,9 @@ public final class RecordBatch {
             expire = true;
 
         if (expire) {
+            //如果超时重试，释放该batch
             this.records.close();
+            //同时进行回调，TimeoutException异常时可以进行重试
             this.done(-1L, Record.NO_TIMESTAMP, new TimeoutException("Batch containing " + recordCount + " record(s) expired due to timeout while requesting metadata from brokers for " + topicPartition));
         }
 

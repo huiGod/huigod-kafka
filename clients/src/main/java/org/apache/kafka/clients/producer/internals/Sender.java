@@ -260,9 +260,12 @@ public class Sender implements Runnable {
 
     /**
      * Handle a produce response
+     * 无论响应结果是什么，都会执行对应的回调操作
      */
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, RecordBatch> batches, long now) {
+        //全局唯一的，用来标识一次请求，发送请求的时候会带该参数，读取到的响应可以用来判断是对应哪一个请求
         int correlationId = response.request().request().header().correlationId();
+        //如果超时或者连接断开的处理逻辑
         if (response.wasDisconnected()) {
             log.trace("Cancelled request {} due to node {} being disconnected", response, response.request()
                                                                                                   .request()
@@ -274,6 +277,7 @@ public class Sender implements Runnable {
                       response.request().request().destination(),
                       correlationId);
             // if we have a response, parse it
+            //如果有响应数据的处理逻辑
             if (response.hasResponse()) {
                 ProduceResponse produceResponse = new ProduceResponse(response.responseBody());
                 for (Map.Entry<TopicPartition, ProduceResponse.PartitionResponse> entry : produceResponse.responses().entrySet()) {
@@ -287,6 +291,7 @@ public class Sender implements Runnable {
                 this.sensors.recordThrottleTime(response.request().request().destination(),
                                                 produceResponse.getThrottleTime());
             } else {
+                //不需要关注响应结果的处理
                 // this is the acks = 0 case, just complete all requests
                 for (RecordBatch batch : batches.values())
                     completeBatch(batch, Errors.NONE, -1L, Record.NO_TIMESTAMP, correlationId, now);
@@ -305,6 +310,7 @@ public class Sender implements Runnable {
      * @param now The current POSIX time stamp in milliseconds
      */
     private void completeBatch(RecordBatch batch, Errors error, long baseOffset, long timestamp, long correlationId, long now) {
+        //判断如果有异常，并且满足重试条件
         if (error != Errors.NONE && canRetry(batch, error)) {
             // retry
             log.warn("Got error produce response with correlation id {} on topic-partition {}, retrying ({} attempts left). Error: {}",
@@ -312,16 +318,20 @@ public class Sender implements Runnable {
                      batch.topicPartition,
                      this.retries - batch.attempts - 1,
                      error);
+            //如果batch可以重试，则重新加入到队头，供下次继续发送
             this.accumulator.reenqueue(batch, now);
             this.sensors.recordRetries(batch.topicPartition.topic(), batch.recordCount);
         } else {
+            //重试条件不满足（可能超过最大重试次数后），也会进行回调并释放资源
             RuntimeException exception;
             if (error == Errors.TOPIC_AUTHORIZATION_FAILED)
                 exception = new TopicAuthorizationException(batch.topicPartition.topic());
             else
                 exception = error.exception();
             // tell the user the result of their request
+            //回调batch对应的回调
             batch.done(baseOffset, timestamp, exception);
+            //batch资源释放
             this.accumulator.deallocate(batch);
             if (error != Errors.NONE)
                 this.sensors.recordErrors(batch.topicPartition.topic(), batch.recordCount);
@@ -337,6 +347,7 @@ public class Sender implements Runnable {
      * We can retry a send if the error is transient and the number of attempts taken is fewer than the maximum allowed
      */
     private boolean canRetry(RecordBatch batch, Errors error) {
+        //满足所配置的重试次数。并且异常是可重试的异常
         return batch.attempts < this.retries && error.exception() instanceof RetriableException;
     }
 
@@ -365,6 +376,7 @@ public class Sender implements Runnable {
         RequestSend send = new RequestSend(Integer.toString(destination),
                                            this.client.nextRequestHeader(ApiKeys.PRODUCE),
                                            request.toStruct());
+        //一个ClientRequest会有对应的一个callback
         RequestCompletionHandler callback = new RequestCompletionHandler() {
             public void onComplete(ClientResponse response) {
                 handleProduceResponse(response, recordsByPartition, time.milliseconds());

@@ -286,6 +286,9 @@ public class NetworkClient implements KafkaClient {
         // process completed actions
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
+
+        //completedSends队列和completedReceives队列只会保存同一个channel对应的一个完整消息
+
         //处理已经发送成功的后续操作
         handleCompletedSends(responses, updatedNow);
         //接收到 broker 响应后执行回调操作
@@ -452,15 +455,16 @@ public class NetworkClient implements KafkaClient {
      * @param responses The list of responses to update
      * @param now The current time
      * 一个 kafkaChannel 只能绑定一个 send，因此一次 IO 处理流程，对同一个 broker 也一定只能发送一个 send
-     * 这里获取的inFlightRequests队列队头元素也一定是刚刚发送的 send
+     * 这里获取的inFlightRequests队列队头元素也一定是刚刚发送完的 send
      */
     private void handleCompletedSends(List<ClientResponse> responses, long now) {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
-            //获取completedSends队列队头元素，一定是刚刚发送出去的request数据
+            //获取completedSends队列队头元素，一定是刚刚发送出去的request数据（只是peek没有poll）
             ClientRequest request = this.inFlightRequests.lastSent(send.destination());
             //通过acks计算是否需要等待请求的响应，如果不需要这里可以直接从inFlightRequests队列里面移出去
             if (!request.expectResponse()) {
+                //如果不需要返回响应直接poll掉即可
                 this.inFlightRequests.completeLastSent(send.destination());
                 responses.add(new ClientResponse(request, now, false, null));
             }
@@ -472,6 +476,11 @@ public class NetworkClient implements KafkaClient {
      *
      * @param responses The list of responses to update
      * @param now The current time
+     *
+     *
+     * 对于同一个broker，连续发送多个request出去，但是会在inFlighRequest里面排队,FlighRequests -> <请求1，请求2，请求3，请求4，请求5>
+     * 此时对broker读取响应，响应1，响应2，都在stagedReceives -> 响应1放在completedReceives -> 只会获取到响应1
+     * 就是直接从inFlighRequests里面移除掉请求1，按照顺序，先发送请求1，那么就应该先获取到请求1对应的响应1，而不是响应2
      */
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
@@ -496,6 +505,8 @@ public class NetworkClient implements KafkaClient {
             processDisconnection(responses, node, now);
         }
         // we got a disconnect so we should probably refresh our metadata and see if that broker is dead
+
+        //如果有连接断开，需要重新拉取元数据
         if (this.selector.disconnected().size() > 0)
             metadataUpdater.requestUpdate();
     }

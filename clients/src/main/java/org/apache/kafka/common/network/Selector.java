@@ -310,6 +310,7 @@ public class Selector implements Selectable {
         if (timeout < 0)
             throw new IllegalArgumentException("timeout should be >= 0");
 
+        //清空队列
         clear();
 
         if (hasStagedReceives() || !immediatelyConnectedKeys.isEmpty())
@@ -330,6 +331,7 @@ public class Selector implements Selectable {
             pollSelectionKeys(immediatelyConnectedKeys, true);
         }
 
+        //将stagedReceives队列中的部分数据放入到completedReceives队列中
         addToCompletedReceives();
 
         long endIo = time.nanoseconds();
@@ -428,6 +430,7 @@ public class Selector implements Selectable {
                     log.debug("Connection with {} disconnected", desc, e);
                 else
                     log.warn("Unexpected error from {}; closing connection", desc, e);
+                //读写任何异常（包括超时），都会关闭连接，释放各种资源。后续会更新拉取元数据标识
                 close(channel);
                 this.disconnected.add(channel.id());
             }
@@ -632,6 +635,10 @@ public class Selector implements Selectable {
 
     /**
      * checks if there are any staged receives and adds to completedReceives
+     * 如果一个连接一次OP_READ读取出来多个响应消息的话，在这里仅仅只会把每个连接对应的第一个响应消息会放到completedReceives里面去，
+     * 供后续处理，此时有可能某个连接的stagedReceives是不为空的
+     *
+     * stagedReceives不为空，则下一次poll不会执行read操作，但是仍然会讲队头第一个响应消息放入到completedReceives中，供后续处理响应并从inFlightRequests中移除
      */
     private void addToCompletedReceives() {
         if (!this.stagedReceives.isEmpty()) {

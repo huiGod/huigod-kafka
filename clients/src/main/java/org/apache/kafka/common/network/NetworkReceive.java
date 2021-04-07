@@ -79,6 +79,7 @@ public class NetworkReceive implements Receive {
      * 精华：
      * 粘包解决方式：size默认是4字节，读取一个 int 类型数据，代表下一次完整的请求体大小
      * 拆包解决方式：NetworkReceive 对象继续存在，在下一次 poll 执行时，发现又有数据可以读取，则继续读取
+     * 拆包问题包含：size发生拆包、body请求体发生拆包，此方法解决了各种拆包与粘包问题
      * @param channel
      * @return
      * @throws IOException

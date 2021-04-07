@@ -225,12 +225,18 @@ public final class BufferPool {
     public void deallocate(ByteBuffer buffer, int size) {
         lock.lock();
         try {
+            //如果满足缓冲池大小限制
             if (size == this.poolableSize && size == buffer.capacity()) {
+                //清空内存数据
                 buffer.clear();
+                //返回到缓冲池供下一个batch使用
                 this.free.add(buffer);
             } else {
+                //否则直接返回到可用缓冲区大小
                 this.availableMemory += size;
             }
+            //如果之前内存已经被耗尽了，此时有线程使用了Condition阻塞在这里等待获取内存资源，
+            //一旦有内存资源还回去了，此时就会使用Condition的await方法，唤醒之前阻塞等待的线程，告诉他们说，可以来尝试获取锁，然后申请内存资源了
             Condition moreMem = this.waiters.peekFirst();
             if (moreMem != null)
                 moreMem.signal();

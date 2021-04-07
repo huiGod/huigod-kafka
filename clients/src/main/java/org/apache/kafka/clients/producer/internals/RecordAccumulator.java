@@ -265,6 +265,7 @@ public final class RecordAccumulator {
                         RecordBatch batch = batchIterator.next();
                         boolean isFull = batch != lastBatch || batch.records.isFull();
                         // check if the batch is expired
+                        //检测batch是否超时，如果超时则移除，并且释放内存空间。如果满足重试条件，该batch会继续加入到队头
                         if (batch.maybeExpire(requestTimeout, retryBackoffMs, now, this.lingerMs, isFull)) {
                             expiredBatches.add(batch);
                             count++;
@@ -288,6 +289,7 @@ public final class RecordAccumulator {
      * Re-enqueue the given record batch in the accumulator to retry
      */
     public void reenqueue(RecordBatch batch, long now) {
+        //设置重试情况下的标识
         batch.attempts++;
         batch.lastAttemptMs = now;
         batch.lastAppendTime = now;
