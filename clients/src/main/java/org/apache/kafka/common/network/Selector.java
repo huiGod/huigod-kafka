@@ -392,7 +392,10 @@ public class Selector implements Selectable {
                 //处理网络读事件（接收请求）
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
+                    //一个 broker 可以通过一个连接连续发送出去多个请求，这些请求可能都没有收到响应消息，此时 broker 端可能会连续处理完
+                    //多个请求然后连续返回多个响应，所以这里通过 while 循环连续不断的读响应数据
                     while ((networkReceive = channel.read()) != null)
+                        //将发送出去的消息放入到stagedReceives队列
                         addToStagedReceives(channel, networkReceive);
                 }
 

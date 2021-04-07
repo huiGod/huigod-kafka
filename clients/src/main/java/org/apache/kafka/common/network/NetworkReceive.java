@@ -76,7 +76,9 @@ public class NetworkReceive implements Receive {
     // This can go away after we get rid of BlockingChannel
 
     /**
-     * size默认是4字节，读取一个 int 类型数据，代表下一次完整的请求体大小
+     * 精华：
+     * 粘包解决方式：size默认是4字节，读取一个 int 类型数据，代表下一次完整的请求体大小
+     * 拆包解决方式：NetworkReceive 对象继续存在，在下一次 poll 执行时，发现又有数据可以读取，则继续读取
      * @param channel
      * @return
      * @throws IOException
@@ -85,18 +87,22 @@ public class NetworkReceive implements Receive {
     public long readFromReadableChannel(ReadableByteChannel channel) throws IOException {
         int read = 0;
         if (size.hasRemaining()) {
+            //读取4个字节数据写入到 size，此时 position=4
             int bytesRead = channel.read(size);
             if (bytesRead < 0)
                 throw new EOFException();
             read += bytesRead;
             if (!size.hasRemaining()) {
+                //将position 设置为0，可以从头开始读数据
                 size.rewind();
+                //读取一个整型数字代表 body 请求体大小
                 int receiveSize = size.getInt();
                 if (receiveSize < 0)
                     throw new InvalidReceiveException("Invalid receive (size = " + receiveSize + ")");
                 if (maxSize != UNLIMITED && receiveSize > maxSize)
                     throw new InvalidReceiveException("Invalid receive (size = " + receiveSize + " larger than " + maxSize + ")");
 
+                //申请固定内存缓冲，供后续从 channel 读取数据存放
                 this.buffer = ByteBuffer.allocate(receiveSize);
             }
         }

@@ -144,7 +144,6 @@ public class KafkaChannel {
             result = receive;
             receive = null;
         }
-        //发生拆包与粘包
         return result;
     }
 
