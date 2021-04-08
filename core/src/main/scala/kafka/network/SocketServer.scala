@@ -439,12 +439,13 @@ private[kafka] class Processor(val id: Int,
         //处理所有新创建的客户端连接，将队列中所有连接poll出注册到selector上，并且关注OP_READ事件
         configureNewConnections()
         // register any new responses for writing
+        //请求处理完毕后，会把响应放入每个 Processor 对应的一个响应队列里，Processor 在这里会从响应队列获取响应然后发送给客户端
         processNewResponses()
-        //处理IO操作，同Producer一致
+        //处理IO操作，调用 Selector 监听各个 SocketChannel 是否有请求可以进行处理
         poll()
-        //处理接收到的数据
+        //对已经接收完毕的请求处理
         processCompletedReceives()
-        //处理完成发送的数据
+        //对已经发送完毕的响应进行处理
         processCompletedSends()
         //处理断开的连接
         processDisconnected()
