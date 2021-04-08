@@ -80,22 +80,29 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
 
       connectionQuotas = new ConnectionQuotas(maxConnectionsPerIp, maxConnectionsPerIpOverrides)
 
+      //TCP 网络缓冲区参数
       val sendBufferSize = config.socketSendBufferBytes
       val recvBufferSize = config.socketReceiveBufferBytes
       val brokerId = config.brokerId
 
       var processorBeginIndex = 0
+      //endpoints可以监听多个端口号，在 server.properties 配置文件中配置
       endpoints.values.foreach { endpoint =>
         val protocol = endpoint.protocolType
+        //numProcessorThreads是  num.network.threads=3 线程配置项
         val processorEndIndex = processorBeginIndex + numProcessorThreads
 
         for (i <- processorBeginIndex until processorEndIndex)
+          //初始化Processor线程
           processors(i) = newProcessor(i, connectionQuotas, protocol)
 
+        //初始化acceptor线程
         val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId,
           processors.slice(processorBeginIndex, processorEndIndex), connectionQuotas)
         acceptors.put(endpoint, acceptor)
+        //启动acceptor线程
         Utils.newThread("kafka-socket-acceptor-%s-%d".format(protocol.toString, endpoint.port), acceptor, false).start()
+        //阻塞等待acceptor线程启动完成
         acceptor.awaitStartup()
 
         processorBeginIndex = processorEndIndex
@@ -237,10 +244,13 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                               processors: Array[Processor],
                               connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
 
+  //创建 Selector 后续用于多路复用
   private val nioSelector = NSelector.open()
+  //创建ServerSocketChannel并初始化
   val serverChannel = openServerSocket(endPoint.host, endPoint.port)
 
   this.synchronized {
+    //Acceptor在初始化时就会启动processor线程（默认3个）
     processors.foreach { processor =>
       Utils.newThread("kafka-network-thread-%d-%s-%d".format(brokerId, endPoint.protocolType.toString, processor.id), processor, false).start()
     }
@@ -248,14 +258,18 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
 
   /**
    * Accept loop that checks for new connection attempts
+    * 启动Acceptor线程
    */
   def run() {
+    //将ServerSocketChannel注册到 Selector 并关注OP_ACCEPT事件
     serverChannel.register(nioSelector, SelectionKey.OP_ACCEPT)
     startupComplete()
     try {
       var currentProcessor = 0
+      //不断循环
       while (isRunning) {
         try {
+          //查看是否有 IO 操作准备就绪
           val ready = nioSelector.select(500)
           if (ready > 0) {
             val keys = nioSelector.selectedKeys()
@@ -264,12 +278,15 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
               try {
                 val key = iter.next
                 iter.remove()
+                //如果是建立连接则处理
                 if (key.isAcceptable)
                   accept(key, processors(currentProcessor))
                 else
+                  //否则抛出异常，因为 Accept 只处理创建连接的请求
                   throw new IllegalStateException("Unrecognized key state for acceptor thread.")
 
                 // round robin to the next processor thread
+                //将新的连接轮询交给processors去处理
                 currentProcessor = (currentProcessor + 1) % processors.length
               } catch {
                 case e: Throwable => error("Error while accepting connection", e)
@@ -303,9 +320,12 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
       else
         new InetSocketAddress(host, port)
     val serverChannel = ServerSocketChannel.open()
+    //设置非阻塞
     serverChannel.configureBlocking(false)
+    //设置 TCP 缓冲区大小
     serverChannel.socket().setReceiveBufferSize(recvBufferSize)
     try {
+      //监听指定端口号
       serverChannel.socket.bind(socketAddress)
       info("Awaiting socket connections on %s:%d.".format(socketAddress.getHostString, serverChannel.socket.getLocalPort))
     } catch {
@@ -320,9 +340,11 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
    */
   def accept(key: SelectionKey, processor: Processor) {
     val serverSocketChannel = key.channel().asInstanceOf[ServerSocketChannel]
+    //创建socketChannel新连接
     val socketChannel = serverSocketChannel.accept()
     try {
       connectionQuotas.inc(socketChannel.socket().getInetAddress)
+      //配置socketChannel参数
       socketChannel.configureBlocking(false)
       socketChannel.socket().setTcpNoDelay(true)
       socketChannel.socket().setKeepAlive(true)
@@ -333,6 +355,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                   socketChannel.socket.getSendBufferSize, sendBufferSize,
                   socketChannel.socket.getReceiveBufferSize, recvBufferSize))
 
+      //将创建好的socketChannel连接交给processor线程处理
       processor.accept(socketChannel)
     } catch {
       case e: TooManyConnectionsException =>
