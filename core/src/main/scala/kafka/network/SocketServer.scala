@@ -280,6 +280,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                 iter.remove()
                 //如果是建立连接则处理
                 if (key.isAcceptable)
+                  //轮询Processor
                   accept(key, processors(currentProcessor))
                 else
                   //否则抛出异常，因为 Accept 只处理创建连接的请求
@@ -397,10 +398,14 @@ private[kafka] class Processor(val id: Int,
     }
   }
 
+  /**
+   * 客户端连接id
+   */
   private case class ConnectionId(localHost: String, localPort: Int, remoteHost: String, remotePort: Int) {
     override def toString: String = s"$localHost:$localPort-$remoteHost:$remotePort"
   }
 
+  //存放客户端SocketChannel连接
   private val newConnections = new ConcurrentLinkedQueue[SocketChannel]()
   private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
   private val metricTags = Map("networkProcessor" -> id.toString).asJava
@@ -414,6 +419,7 @@ private[kafka] class Processor(val id: Int,
     metricTags.asScala
   )
 
+  //对原生Selector封装
   private val selector = new KSelector(
     maxRequestSize,
     connectionsMaxIdleMs,
@@ -426,15 +432,21 @@ private[kafka] class Processor(val id: Int,
 
   override def run() {
     startupComplete()
+    //循环执行
     while (isRunning) {
       try {
         // setup any new connections that have been queued up
+        //处理所有新创建的客户端连接，将队列中所有连接poll出注册到selector上，并且关注OP_READ事件
         configureNewConnections()
         // register any new responses for writing
         processNewResponses()
+        //处理IO操作，同Producer一致
         poll()
+        //处理接收到的数据
         processCompletedReceives()
+        //处理完成发送的数据
         processCompletedSends()
+        //处理断开的连接
         processDisconnected()
       } catch {
         // We catch all the throwables here to prevent the processor thread from exiting. We do this because
@@ -503,8 +515,10 @@ private[kafka] class Processor(val id: Int,
   }
 
   private def processCompletedReceives() {
+    //遍历接收到的数据列表completedReceives
     selector.completedReceives.asScala.foreach { receive =>
       try {
+        //获取发送数据的客户端连接
         val channel = selector.channel(receive.source)
         val session = RequestChannel.Session(new KafkaPrincipal(KafkaPrincipal.USER_TYPE, channel.principal.getName),
           channel.socketAddress)
@@ -545,7 +559,9 @@ private[kafka] class Processor(val id: Int,
    * Queue up a new connection for reading
    */
   def accept(socketChannel: SocketChannel) {
+    //将客户端连接放入到Processor队列
     newConnections.add(socketChannel)
+    //唤醒Processor线程对应的Selector
     wakeup()
   }
 
@@ -553,6 +569,7 @@ private[kafka] class Processor(val id: Int,
    * Register any new connections that have been queued up
    */
   private def configureNewConnections() {
+    //如果newConnections队列不为空，则poll出所有SocketChannel连接注册到selector，并且关注OP_READ事件
     while (!newConnections.isEmpty) {
       val channel = newConnections.poll()
       try {
@@ -561,7 +578,9 @@ private[kafka] class Processor(val id: Int,
         val localPort = channel.socket().getLocalPort
         val remoteHost = channel.socket().getInetAddress.getHostAddress
         val remotePort = channel.socket().getPort
+        //客户端连接id
         val connectionId = ConnectionId(localHost, localPort, remoteHost, remotePort).toString
+        //创建的连接会在Map<String, KafkaChannel> channels中维护
         selector.register(connectionId, channel)
       } catch {
         // We explicitly catch all non fatal exceptions and close the socket to avoid a socket leak. The other
