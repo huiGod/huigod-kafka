@@ -45,6 +45,7 @@ object RequestChannel extends Logging {
 
   case class Session(principal: KafkaPrincipal, clientAddress: InetAddress)
 
+  //组装请求数据
   case class Request(processor: Int, connectionId: String, session: Session, private var buffer: ByteBuffer, startTimeMs: Long, securityProtocol: SecurityProtocol) {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
@@ -178,7 +179,9 @@ object RequestChannel extends Logging {
 
 class RequestChannel(val numProcessors: Int, val queueSize: Int) extends KafkaMetricsGroup {
   private var responseListeners: List[(Int) => Unit] = Nil
+  //请求队列，默认500
   private val requestQueue = new ArrayBlockingQueue[RequestChannel.Request](queueSize)
+  //响应队列，默认是同 processor 线程数相同大小
   private val responseQueues = new Array[BlockingQueue[RequestChannel.Response]](numProcessors)
   for(i <- 0 until numProcessors)
     responseQueues(i) = new LinkedBlockingQueue[RequestChannel.Response]()

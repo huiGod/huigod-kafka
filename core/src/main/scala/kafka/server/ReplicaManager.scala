@@ -319,6 +319,8 @@ class ReplicaManager(val config: KafkaConfig,
   /**
    * Append messages to leader replicas of the partition, and wait for them to be replicated to other replicas;
    * the callback function will be triggered either when timeout or the required acks are satisfied
+   * 将消息发送给 leader partition，并且等待其复制给其他的 replica
+   * callback函数将会在超时或者满足acks要求的情况下被触发调用
    */
   def appendMessages(timeout: Long,
                      requiredAcks: Short,
@@ -326,6 +328,7 @@ class ReplicaManager(val config: KafkaConfig,
                      messagesPerPartition: Map[TopicPartition, MessageSet],
                      responseCallback: Map[TopicPartition, PartitionResponse] => Unit) {
 
+    //检验ack必须是-1|1|0
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = SystemTime.milliseconds
       val localProduceResults = appendToLocalLog(internalTopicsAllowed, messagesPerPartition, requiredAcks)
@@ -359,6 +362,7 @@ class ReplicaManager(val config: KafkaConfig,
     } else {
       // If required.acks is outside accepted range, something is wrong with the client
       // Just return an error and don't handle the request at all
+      //ack 异常，封装异常响应
       val responseStatus = messagesPerPartition.map {
         case (topicAndPartition, messageSet) =>
           (topicAndPartition -> new PartitionResponse(Errors.INVALID_REQUIRED_ACKS.code,

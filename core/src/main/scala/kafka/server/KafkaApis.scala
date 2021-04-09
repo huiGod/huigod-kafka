@@ -67,12 +67,14 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Top-level method that handles all requests and multiplexes to the right api
+    * 根据请求参数中requestId分发到正确处理请求的逻辑
    */
   def handle(request: RequestChannel.Request) {
     try {
       trace("Handling request:%s from connection %s;securityProtocol:%s,principal:%s".
         format(request.requestDesc(true), request.connectionId, request.securityProtocol, request.session.principal))
       ApiKeys.forId(request.requestId) match {
+          //生产者发送请求处理逻辑
         case ApiKeys.PRODUCE => handleProducerRequest(request)
         case ApiKeys.FETCH => handleFetchRequest(request)
         case ApiKeys.LIST_OFFSETS => handleOffsetRequest(request)
@@ -332,6 +334,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
 
     // the callback for sending a produce response
+    //每一个请求，都包含了多个分区的一个Batch。所以在执行请求的时候，将每个分区的Batch数据追加到对应分区的磁盘文件中，最终每个分区都对应一个结果
     def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]) {
 
       val mergedResponseStatus = responseStatus ++ unauthorizedRequestInfo.mapValues(_ =>
@@ -350,7 +353,9 @@ class KafkaApis(val requestChannel: RequestChannel,
         }
       }
 
+      //响应最终会执行该回调
       def produceResponseCallback(delayTimeMs: Int) {
+        //依据 acks 回调不同的逻辑
         if (produceRequest.acks == 0) {
           // no operation needed if producer request.required.acks = 0; however, if there is any error in handling
           // the request, since no response is expected by the producer, the server will close socket server so that
@@ -402,6 +407,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
 
       // call the replica manager to append messages to the replicas
+      //调用副本管理组件，将消息同步给所有 replica
       replicaManager.appendMessages(
         produceRequest.timeout.toLong,
         produceRequest.acks,
