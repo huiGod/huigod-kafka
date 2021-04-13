@@ -398,15 +398,14 @@ private[kafka] class Processor(val id: Int,
     }
   }
 
-  /**
-   * 客户端连接id
-   */
+  //客户端连接id
   private case class ConnectionId(localHost: String, localPort: Int, remoteHost: String, remotePort: Int) {
     override def toString: String = s"$localHost:$localPort-$remoteHost:$remotePort"
   }
 
   //存放客户端SocketChannel连接
   private val newConnections = new ConcurrentLinkedQueue[SocketChannel]()
+  //存放响应
   private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
   private val metricTags = Map("networkProcessor" -> id.toString).asJava
 
@@ -430,6 +429,9 @@ private[kafka] class Processor(val id: Int,
     false,
     ChannelBuilders.create(protocol, Mode.SERVER, LoginType.SERVER, channelConfigs, null, true))
 
+  /**
+    * 关注事件类型的变化--精华
+    */
   override def run() {
     startupComplete()
     //循环执行
@@ -439,13 +441,13 @@ private[kafka] class Processor(val id: Int,
         //处理所有新创建的客户端连接，将队列中所有连接poll出注册到selector上，并且关注OP_READ事件
         configureNewConnections()
         // register any new responses for writing
-        //请求处理完毕后，会把响应放入每个 Processor 对应的一个响应队列里，Processor 在这里会从响应队列获取响应然后发送给客户端
+        //KafkaRequestHandlerPool线程池处理完请求后，会把响应放入每个 Processor 对应的一个响应队列responseQueues里，Processor 在这里会从响应队列获取响应然后发送给客户端
         processNewResponses()
         //处理IO操作，调用 Selector 监听各个 SocketChannel 是否有请求可以进行处理
         poll()
         //对已经接收完毕的请求处理
         processCompletedReceives()
-        //对已经发送完毕的响应进行处理
+        //对需要发送的数据进行处理
         processCompletedSends()
         //处理断开的连接
         processDisconnected()
@@ -466,6 +468,7 @@ private[kafka] class Processor(val id: Int,
   }
 
   private def processNewResponses() {
+    //获取responseQueues响应队列数据
     var curr = requestChannel.receiveResponse(id)
     while (curr != null) {
       try {
@@ -475,12 +478,15 @@ private[kafka] class Processor(val id: Int,
             // that are sitting in the server's socket buffer
             curr.request.updateRequestMetrics
             trace("Socket server received empty response to send, registering for read: " + curr)
+            //没有响应需要发送给客户端，因此可以关注 OP_READ 读取更多的请求数据来处理
             selector.unmute(curr.request.connectionId)
           case RequestChannel.SendAction =>
+            //需要返回客户端响应，涉及到写数据
             sendResponse(curr)
           case RequestChannel.CloseConnectionAction =>
             curr.request.updateRequestMetrics
             trace("Closing socket connection actively according to the response code.")
+            //关闭连接
             close(selector, curr.request.connectionId)
         }
       } finally {
@@ -516,7 +522,7 @@ private[kafka] class Processor(val id: Int,
   }
 
   private def processCompletedReceives() {
-    //遍历接收到的数据列表completedReceives
+    //遍历接收到的完整数据列表completedReceives
     selector.completedReceives.asScala.foreach { receive =>
       try {
         //获取发送数据的客户端连接
@@ -525,7 +531,9 @@ private[kafka] class Processor(val id: Int,
           channel.socketAddress)
         //组装请求对象参数
         val req = RequestChannel.Request(processor = id, connectionId = receive.source, session = session, buffer = receive.payload, startTimeMs = time.milliseconds, securityProtocol = protocol)
+        //将请求线程安全地并发添加到requestQueue队列中
         requestChannel.sendRequest(req)
+        //这里移除OP_READ事件，也就是同一个 KafkaChannel只会处理一个接收到的完整请求，待处理完后才能继续从completedReceives获取下一个完整请求
         selector.mute(receive.source)
       } catch {
         case e @ (_: InvalidRequestException | _: SchemaException) =>
@@ -536,12 +544,20 @@ private[kafka] class Processor(val id: Int,
     }
   }
 
+  /**
+    * 接收到的数据需要KafkaRequestHandlerPool处理完后，对需要返回给客户端响应的数据才会进行发送，发送成功后数据才会保存到completedSends中
+    * 也就是接下来可以继续处理更多的响应数据，添加 OP_READ 事件
+    */
   private def processCompletedSends() {
+    //遍历已经发送出去的数据列表
+    //从inflightResponses中移除
     selector.completedSends.asScala.foreach { send =>
       val resp = inflightResponses.remove(send.destination).getOrElse {
         throw new IllegalStateException(s"Send for ${send.destination} completed, but not in `inflightResponses`")
       }
       resp.request.updateRequestMetrics()
+      //再次关注 OP_READ 事件
+      //处理完需要发送的数据后后，可以继续获取请求数据来处理
       selector.unmute(send.destination)
     }
   }

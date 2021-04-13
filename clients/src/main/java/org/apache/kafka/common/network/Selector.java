@@ -638,7 +638,8 @@ public class Selector implements Selectable {
      * 如果一个连接一次OP_READ读取出来多个响应消息的话，在这里仅仅只会把每个连接对应的第一个响应消息会放到completedReceives里面去，
      * 供后续处理，此时有可能某个连接的stagedReceives是不为空的
      *
-     * stagedReceives不为空，则下一次poll不会执行read操作，但是仍然会讲队头第一个响应消息放入到completedReceives中，供后续处理响应并从inFlightRequests中移除
+     * stagedReceives不为空，则下一次poll不会执行read操作，但是仍然会将队头第一个响应消息放入到completedReceives中，
+     * 供后续处理响应并从inFlightRequests中移除
      */
     private void addToCompletedReceives() {
         if (!this.stagedReceives.isEmpty()) {
@@ -646,6 +647,9 @@ public class Selector implements Selectable {
             while (iter.hasNext()) {
                 Map.Entry<KafkaChannel, Deque<NetworkReceive>> entry = iter.next();
                 KafkaChannel channel = entry.getKey();
+                //只有关注 OP_READ 事件，才会进行处理
+                //RequestChannel的requestQueue队列在保存一个请求数据后，移除OP_READ 事件，这里就不会将数据继续放入到completedReceives中
+                //只有待requestQueue队列处理完一个请求后，才能继续从stagedReceives获取数据放入到completedReceives中
                 if (!channel.isMute()) {
                     Deque<NetworkReceive> deque = entry.getValue();
                     NetworkReceive networkReceive = deque.poll();
