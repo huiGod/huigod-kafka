@@ -424,20 +424,29 @@ class Partition(val topic: String,
   }
 
   def appendMessagesToLeader(messages: ByteBufferMessageSet, requiredAcks: Int = 0) = {
+    //获取读锁
     val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock) {
       val leaderReplicaOpt = leaderReplicaIfLocal()
+      //判断 partition 在本地是否是leader
       leaderReplicaOpt match {
         case Some(leaderReplica) =>
+
+          //获取分区对应的 Log
           val log = leaderReplica.log.get
+
+          //配置定义的，表示 isr 中至少有多少个 replica
+          //如果配置为2，表示必须有一个 leader 和一个 follower
           val minIsr = log.config.minInSyncReplicas
           val inSyncSize = inSyncReplicas.size
 
           // Avoid writing to leader if there are not enough insync replicas to make it safe
+          //如果当前 isr 消息所配置数，并且 ack 是-1，则抛错
           if (inSyncSize < minIsr && requiredAcks == -1) {
             throw new NotEnoughReplicasException("Number of insync replicas for partition [%s,%d] is [%d], below required minimum [%d]"
               .format(topic, partitionId, inSyncSize, minIsr))
           }
 
+          //基于 Log将消息写入磁盘文件
           val info = log.append(messages, assignOffsets = true)
           // probably unblock some follower fetch requests since log end offset has been updated
           replicaManager.tryCompleteDelayedFetch(new TopicPartitionOperationKey(this.topic, this.partitionId))

@@ -112,25 +112,37 @@ class ReplicaManager(val config: KafkaConfig,
   /* epoch of the controller that last changed the leader */
   @volatile var controllerEpoch: Int = KafkaController.InitialControllerEpoch - 1
   private val localBrokerId = config.brokerId
+
+  //保存了当前这台 broker 上存储的所有 partition
   private val allPartitions = new Pool[(String, Int), Partition](valueFactory = Some { case (t, p) =>
     new Partition(t, p, time, this)
   })
   private val replicaStateChangeLock = new Object
   val replicaFetcherManager = new ReplicaFetcherManager(config, this, metrics, jTime, threadNamePrefix)
+
+  //每个 leader 写入了一条消息，leader partition 的 LEO 会推进一位
+  //但是必须等到所有的 follower 都同步了这条消息，partition 的 HW 才能整体推进一位
+  //消费者只能督导 HW 高水位以下的消息
   private val highWatermarkCheckPointThreadStarted = new AtomicBoolean(false)
   val highWatermarkCheckpoints = config.logDirs.map(dir => (new File(dir).getAbsolutePath, new OffsetCheckpoint(new File(dir, ReplicaManager.HighWatermarkFilename)))).toMap
   private var hwThreadInitialized = false
   this.logIdent = "[Replica Manager on Broker " + localBrokerId + "]: "
   val stateChangeLogger = KafkaController.stateChangeLogger
+
+  //isr 列表，leader 一定在列表中，follower 却不一定
+  //必须是 follower 跟上了 leader 的数据同步，没有落后太多，才会维护在 isr 列表中
+  //下面这些数据结构都是用来维护 isr 列表的
   private val isrChangeSet: mutable.Set[TopicAndPartition] = new mutable.HashSet[TopicAndPartition]()
   private val lastIsrChangeMs = new AtomicLong(System.currentTimeMillis())
   private val lastIsrPropagationMs = new AtomicLong(System.currentTimeMillis())
 
+  //时间轮算法实现的延迟调度机制
   val delayedProducePurgatory = DelayedOperationPurgatory[DelayedProduce](
     purgatoryName = "Produce", config.brokerId, config.producerPurgatoryPurgeIntervalRequests)
   val delayedFetchPurgatory = DelayedOperationPurgatory[DelayedFetch](
     purgatoryName = "Fetch", config.brokerId, config.fetchPurgatoryPurgeIntervalRequests)
 
+  //本地 leader 的数量
   val leaderCount = newGauge(
     "LeaderCount",
     new Gauge[Int] {
@@ -139,18 +151,24 @@ class ReplicaManager(val config: KafkaConfig,
       }
     }
   )
+
+  //本地 partition 的数量
   val partitionCount = newGauge(
     "PartitionCount",
     new Gauge[Int] {
       def value = allPartitions.size
     }
   )
+
+  //副本数量不充足的 partition
   val underReplicatedPartitions = newGauge(
     "UnderReplicatedPartitions",
     new Gauge[Int] {
       def value = underReplicatedPartitionCount()
     }
   )
+
+  //isr 列表扩张和伸缩的速率
   val isrExpandRate = newMeter("IsrExpandsPerSec",  "expands", TimeUnit.SECONDS)
   val isrShrinkRate = newMeter("IsrShrinksPerSec",  "shrinks", TimeUnit.SECONDS)
 
@@ -319,8 +337,11 @@ class ReplicaManager(val config: KafkaConfig,
   /**
    * Append messages to leader replicas of the partition, and wait for them to be replicated to other replicas;
    * the callback function will be triggered either when timeout or the required acks are satisfied
-   * 将消息发送给 leader partition，并且等待其复制给其他的 replica
-   * callback函数将会在超时或者满足acks要求的情况下被触发调用
+   * 将消息发送给 leader partition，并且等待其复制给其他的 replica。callback函数将会在超时或者满足acks要求的情况下被触发调用
+    *
+    * 每个分区对应一个MessageSet，集合中的每条消息都有固定的格式
+    * 回调函数的结构，也是每个分区对应一个PartitionResponse，响应中包含对一个分区磁盘文件的数据写入的结果
+   *
    */
   def appendMessages(timeout: Long,
                      requiredAcks: Short,
@@ -329,9 +350,12 @@ class ReplicaManager(val config: KafkaConfig,
                      responseCallback: Map[TopicPartition, PartitionResponse] => Unit) {
 
     //检验ack必须是-1|1|0
+    //1:leader 写入成功即可
+    //-1:客户端不需要等待返回值
+    //0/all:需要等待所有的副本都拉取数据才能返回
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = SystemTime.milliseconds
-      //将消息追加到本地副本 log 中
+      //将消息写入每个分区的磁盘文件中，获取到对应的结果
       val localProduceResults = appendToLocalLog(internalTopicsAllowed, messagesPerPartition, requiredAcks)
       debug("Produce to local log in %d ms".format(SystemTime.milliseconds - sTime))
 
@@ -402,6 +426,7 @@ class ReplicaManager(val config: KafkaConfig,
       BrokerTopicStats.getBrokerTopicStats(topicPartition.topic).totalProduceRequestRate.mark()
       BrokerTopicStats.getBrokerAllTopicsStats().totalProduceRequestRate.mark()
 
+      //内部 topic， 类似__consumer_offsets供内部使用
       // reject appending to internal topics if it is not allowed
       if (Topic.isInternal(topicPartition.topic) && !internalTopicsAllowed) {
         (topicPartition, LogAppendResult(
@@ -409,9 +434,11 @@ class ReplicaManager(val config: KafkaConfig,
           Some(new InvalidTopicException("Cannot append to internal topic %s".format(topicPartition.topic)))))
       } else {
         try {
+          //获取分区对应的Partition对象
           val partitionOpt = getPartition(topicPartition.topic, topicPartition.partition)
           val info = partitionOpt match {
             case Some(partition) =>
+              //将需要写入该分区的数据写入磁盘文件
               partition.appendMessagesToLeader(messages.asInstanceOf[ByteBufferMessageSet], requiredAcks)
             case None => throw new UnknownTopicOrPartitionException("Partition %s doesn't exist on %d"
               .format(topicPartition, localBrokerId))

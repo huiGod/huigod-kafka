@@ -11,4 +11,7 @@ Apache Kafka源码学习
 # broker原理
 
 ## 网络模型
+## HW/LEO 机制
+## isr
+## 时间轮算法实现的延迟调度机制
 

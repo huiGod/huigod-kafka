@@ -597,6 +597,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
     val defaultProps = KafkaServer.copyKafkaConfigToLog(config)
     val defaultLogConfig = LogConfig(defaultProps)
 
+    //从 zk 中获取 topic 元数据
     val configs = AdminUtils.fetchAllTopicConfigs(zkUtils).map { case (topic, configs) =>
       topic -> LogConfig.fromProps(defaultProps, configs)
     }

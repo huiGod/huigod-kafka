@@ -317,6 +317,7 @@ class Log(val dir: File,
    * @return Information about the appended messages including the first and last offset.
    */
   def append(messages: ByteBufferMessageSet, assignOffsets: Boolean = true): LogAppendInfo = {
+    //分析校验消息格式
     val appendInfo = analyzeAndValidateMessageSet(messages)
 
     // if we have any valid messages, append them to the log
@@ -328,9 +329,11 @@ class Log(val dir: File,
 
     try {
       // they are valid, insert them in the log
+      //对于一个分区目录而言，写入的时候都是进行并发控制的
       lock synchronized {
 
         if (assignOffsets) {
+          //对于每个分区目录，在写入数据的时候，这个消息的 offset 都是顺序增长的
           // assign offsets to the message set
           val offset = new LongRef(nextOffsetMetadata.messageOffset)
           appendInfo.firstOffset = offset.value
@@ -379,18 +382,22 @@ class Log(val dir: File,
             .format(validMessages.sizeInBytes, config.segmentSize))
         }
 
+        //如果一个 segment 写满了，此时创建新的 segment file
         // maybe roll the log if this segment is full
         val segment = maybeRoll(validMessages.sizeInBytes)
 
+        //基于 segment 来写入消息到磁盘文件中
         // now append to the log
         segment.append(appendInfo.firstOffset, validMessages)
 
+        //更新 LEO
         // increment the log end offset
         updateLogEndOffset(appendInfo.lastOffset + 1)
 
         trace("Appended message set to log %s with first offset: %d, next offset: %d, and messages: %s"
           .format(this.name, appendInfo.firstOffset, nextOffsetMetadata.messageOffset, validMessages))
 
+        //os cache flush 磁盘
         if (unflushedMessages >= config.flushInterval)
           flush()
 

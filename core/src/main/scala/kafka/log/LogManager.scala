@@ -36,6 +36,14 @@ import java.util.concurrent.{ExecutionException, ExecutorService, Executors, Fut
  * size or I/O rate.
  * 
  * A background thread handles log retention by periodically truncating excess log segments.
+  *
+  * 每个 Partition 的 leader 或者 follower 就是一个 Replica
+  * 每个 Partition Replica 对应一个 Log
+  *
+  * 如果要在 Partition Leader 中写入一批数据，就是往 Log 中写入数据
+  * 但是每个 Log 在底层是对应磁盘目录的，在目录里拆分成了多个 Log Segment 日志段
+  * 每个日志段有一个磁盘文件
+  * 每个磁盘文件会对应一个.log 和.index 文件，前者存放数据，后者存放稀疏索引
  */
 @threadsafe
 class LogManager(val logDirs: Array[File],
@@ -53,14 +61,21 @@ class LogManager(val logDirs: Array[File],
   val LockFile = ".lock"
   val InitialTaskDelayMs = 30*1000
   private val logCreationOrDeletionLock = new Object
+
+  //每个分区对应一个 Log
   private val logs = new Pool[TopicAndPartition, Log]()
 
+  //校验并创建目录文件
   createAndValidateLogDirs(logDirs)
+  //对文件目录加锁
   private val dirLocks = lockLogDirs(logDirs)
   private val recoveryPointCheckpoints = logDirs.map(dir => (dir, new OffsetCheckpoint(new File(dir, RecoveryPointCheckpointFile)))).toMap
+
+  //扫描所配置的 logDir 目录结构，根据目录和文件格式，加载出来当前本地存储了哪些分区信息，最终实例化成对象存放在内存中
   loadLogs()
 
   // public, so we can access this from kafka.admin.DeleteTopicTest
+  //清理磁盘文件
   val cleaner: LogCleaner =
     if(cleanerConfig.enableCleaner)
       new LogCleaner(cleanerConfig, logDirs, logs, time = time)
@@ -113,9 +128,11 @@ class LogManager(val logDirs: Array[File],
     val jobs = mutable.Map.empty[File, Seq[Future[_]]]
 
     for (dir <- this.logDirs) {
+      //每个目录都由一个线程池来扫描处理
       val pool = Executors.newFixedThreadPool(ioThreads)
       threadPools.append(pool)
 
+      //校验清理关闭文件的存在
       val cleanShutdownFile = new File(dir, Log.CleanShutdownFile)
 
       if (cleanShutdownFile.exists) {
@@ -139,16 +156,23 @@ class LogManager(val logDirs: Array[File],
       }
 
       val jobsForDir = for {
+        //遍历配置dir下的所有文件，过滤出文件目录
         dirContent <- Option(dir.listFiles).toList
         logDir <- dirContent if logDir.isDirectory
       } yield {
         CoreUtils.runnable {
           debug("Loading log '" + logDir.getName + "'")
 
+          //扫描指定目录下文件，保存为 Topic 名字-Partition 序号
           val topicPartition = Log.parseTopicPartitionName(logDir)
+
+          //设置 Partition 的默认LogConfig配置
           val config = topicConfigs.getOrElse(topicPartition.topic, defaultConfig)
+
+          //设置 Partition 的默认recoveryPoint为0
           val logRecoveryPoint = recoveryPoints.getOrElse(topicPartition, 0L)
 
+          //封装为Log
           val current = new Log(logDir, config, logRecoveryPoint, scheduler, time)
           val previous = this.logs.put(topicPartition, current)
 
