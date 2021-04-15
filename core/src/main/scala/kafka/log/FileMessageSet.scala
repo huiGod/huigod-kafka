@@ -294,6 +294,8 @@ class FileMessageSet private[kafka](@volatile var file: File,
    * Append these messages to the message set
    */
   def append(messages: ByteBufferMessageSet) {
+    //ByteBufferMessageSet封装了这个分区本次要写入的所有数据，调用writeFullyTo方法就是把这些数据写入到一个 Channel 里去
+    //Channel底层一定是映射到磁盘文件，而且也会基于 os cache 写入
     val written = messages.writeFullyTo(channel)
     _size.getAndAdd(written)
   }

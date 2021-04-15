@@ -295,9 +295,12 @@ class ByteBufferMessageSet(val buffer: ByteBuffer) extends MessageSet with Loggi
 
   /** Write the messages in this set to the given channel */
   def writeFullyTo(channel: GatheringByteChannel): Int = {
+    //需要写入的数据都是存在于 ByteBuffer 中，这里都是基于 Java NIO 的操作，涉及到网络通信、磁盘读写、内存管理
+    //mark 操作对当前 position做一个标记，后续读写对应的 position 都会变化，可以执行 reset 操作将 position 恢复到 mark 标记的位置
     buffer.mark()
     var written = 0
     while (written < sizeInBytes)
+      //基于 FileChannel 写入数据也会先写入到 os cache，不会直接进入到磁盘文件，后续执行 flush 操作后才会真正写入磁盘
       written += channel.write(buffer)
     buffer.reset()
     written

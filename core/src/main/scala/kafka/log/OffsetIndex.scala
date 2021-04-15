@@ -58,12 +58,14 @@ class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long,
   private val lock = new ReentrantLock
   
   /* initialize the memory mapping for this index */
+  //MappedByteBuffer是基于 os cache 实现的文件映射到内存的技术
   @volatile
   private[this] var mmap: MappedByteBuffer = {
     val newlyCreated = _file.createNewFile()
     val raf = new RandomAccessFile(_file, "rw")
     try {
       /* pre-allocate the file if necessary */
+      //如果是新创建的则设置存储大小
       if (newlyCreated) {
         if (maxIndexSize < 8)
           throw new IllegalArgumentException("Invalid max index size: " + maxIndexSize)
@@ -72,6 +74,7 @@ class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long,
 
       /* memory-map the file */
       val len = raf.length()
+      //读写模式内存赢色号
       val idx = raf.getChannel.map(FileChannel.MapMode.READ_WRITE, 0, len)
 
       /* set the position in the index for the next entry */
@@ -201,12 +204,15 @@ class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long,
   
   /**
    * Append an entry for the given offset/location pair to the index. This entry must have a larger offset than all subsequent entries.
+    * 每8个字节就是一条稀疏索引，写入2个 Int类型数据，一个是基于当前 segment 相对逻辑 offset，一个是物理 offset
    */
   def append(offset: Long, position: Int) {
     inLock(lock) {
       require(!isFull, "Attempt to append to a full index (size = " + _entries + ").")
       if (_entries == 0 || offset > _lastOffset) {
         debug("Adding index entry %d => %d to %s.".format(offset, position, _file.getName))
+        //把.index 文件映射到 os 内存中，针对它的读写都是基于 os cache 来完成的
+        //首先写入的是基于当前 segment file 的相对逻辑 offset
         mmap.putInt((offset - baseOffset).toInt)
         mmap.putInt(position)
         _entries += 1

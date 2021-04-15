@@ -335,6 +335,7 @@ class Log(val dir: File,
         if (assignOffsets) {
           //对于每个分区目录，在写入数据的时候，这个消息的 offset 都是顺序增长的
           // assign offsets to the message set
+          //这里是起始 offset
           val offset = new LongRef(nextOffsetMetadata.messageOffset)
           appendInfo.firstOffset = offset.value
           val now = time.milliseconds
@@ -351,6 +352,7 @@ class Log(val dir: File,
             case e: IOException => throw new KafkaException("Error in validating messages while appending to log '%s'".format(name), e)
           }
           validMessages = validatedMessages
+          //消息都校验完后，更新整个消息的终止 offset，作为后续写入消息后的 LEO
           appendInfo.lastOffset = offset.value - 1
           if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME)
             appendInfo.timestamp = now
@@ -623,6 +625,8 @@ class Log(val dir: File,
    */
   private def maybeRoll(messagesSize: Int): LogSegment = {
     val segment = activeSegment
+    //segmentSize配置默认是1G
+    //判断是否需要新创建 segment
     if (segment.size > config.segmentSize - messagesSize ||
         segment.size > 0 && time.milliseconds - segment.created > config.segmentMs - segment.rollJitterMs ||
         segment.index.isFull) {
@@ -648,9 +652,12 @@ class Log(val dir: File,
   def roll(): LogSegment = {
     val start = time.nanoseconds
     lock synchronized {
+      //当前 partition 的 LEO 就是消息的下一个 offset，可以直接作为新的segment file 起始 offset 使用，也就是文件名
       val newOffset = logEndOffset
+      //.log 与.index 文件名规则一致
       val logFile = logFilename(dir, newOffset)
       val indexFile = indexFilename(dir, newOffset)
+      //如果文件已经存在则删除
       for(file <- List(logFile, indexFile); if file.exists) {
         warn("Newly rolled segment file " + file.getName + " already exists; deleting it first")
         file.delete()
@@ -663,6 +670,8 @@ class Log(val dir: File,
           entry.getValue.log.trim()
         }
       }
+
+      //LogSegment底层构造函数中，会将 dir 地址文件映射成FileChannel保存，供后续 .log 日志的写入
       val segment = new LogSegment(dir,
                                    startOffset = newOffset,
                                    indexIntervalBytes = config.indexInterval,
@@ -672,6 +681,7 @@ class Log(val dir: File,
                                    fileAlreadyExists = false,
                                    initFileSize = initFileSize,
                                    preallocate = config.preallocate)
+      //构造 segment 并添加到集合维护
       val prev = addSegment(segment)
       if(prev != null)
         throw new KafkaException("Trying to roll a new log segment for topic partition %s with start offset %d while it already exists.".format(name, newOffset))

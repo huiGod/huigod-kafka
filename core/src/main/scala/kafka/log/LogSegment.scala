@@ -70,19 +70,28 @@ class LogSegment(val log: FileMessageSet,
    *
    * It is assumed this method is being called from within a lock.
    *
-   * @param offset The first offset in the message set.
+   * @param offset   The first offset in the message set.
    * @param messages The messages to append.
+   * Kafka 中的索引文件，以稀疏索引(sparse index)的方式构造消息的索引，它并不保证每个消息在索引文件中都有对应的索引项。
+   * 每当写入一定量（由 broker 端参数 log.index.interval.bytes 指定，默认值为 4096，即 4KB）的消息时，
+   * 偏移量索引文件和时间戳索引文件分别增加一个偏移量索引项和时间戳索引项，增大或减小 log.index.interval.bytes 的值，对应地可以缩小或增加索引项的密度。
+   * 稀疏索引通过 MappedByteBuffer 将索引文件映射到内存中，以加快索引的查询速度
    */
   @nonthreadsafe
   def append(offset: Long, messages: ByteBufferMessageSet) {
+
     if (messages.sizeInBytes > 0) {
       trace("Inserting %d bytes at offset %d at position %d".format(messages.sizeInBytes, offset, log.sizeInBytes()))
       // append an entry to the index (if needed)
+      //没当写入的消息字节数大于所配置的4096字节数，则写入一条稀疏索引
       if(bytesSinceLastIndexEntry > indexIntervalBytes) {
+        //写入逻辑 offset-->数据物理存储位置（log 一直在写入数据，因此总的字节数会对应递增，也就是磁盘所在的物理位置）
         index.append(offset, log.sizeInBytes())
         this.bytesSinceLastIndexEntry = 0
       }
       // append the messages
+      //消息追加到.log 文件中
+      //消息格式见Message类说明文档
       log.append(messages)
       this.bytesSinceLastIndexEntry += messages.sizeInBytes
     }
