@@ -15,5 +15,5 @@ Apache Kafka源码学习
 ## isr
 ## 时间轮算法实现的延迟调度机制
 ## 磁盘.index 写入机制
-## 磁盘内存映射机制
+## 磁盘内存映射机制，为什么.index 使用 mmap，.log 使用 fileChannel
 

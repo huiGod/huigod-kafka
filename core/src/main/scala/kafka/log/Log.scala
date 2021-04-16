@@ -335,11 +335,12 @@ class Log(val dir: File,
         if (assignOffsets) {
           //对于每个分区目录，在写入数据的时候，这个消息的 offset 都是顺序增长的
           // assign offsets to the message set
-          //这里是起始 offset
+          //当前 LEO
           val offset = new LongRef(nextOffsetMetadata.messageOffset)
           appendInfo.firstOffset = offset.value
           val now = time.milliseconds
           val (validatedMessages, messageSizesMaybeChanged) = try {
+            //校验并且设置offset
             validMessages.validateMessagesAndAssignOffsets(offset,
                                                            now,
                                                            appendInfo.sourceCodec,
@@ -352,7 +353,7 @@ class Log(val dir: File,
             case e: IOException => throw new KafkaException("Error in validating messages while appending to log '%s'".format(name), e)
           }
           validMessages = validatedMessages
-          //消息都校验完后，更新整个消息的终止 offset，作为后续写入消息后的 LEO
+          //消息最后的 offset
           appendInfo.lastOffset = offset.value - 1
           if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME)
             appendInfo.timestamp = now
@@ -400,6 +401,7 @@ class Log(val dir: File,
           .format(this.name, appendInfo.firstOffset, nextOffsetMetadata.messageOffset, validMessages))
 
         //os cache flush 磁盘
+        //距离上次 flush 后，通过与 LEO 计算，未 flush 消息的数量超过所配置（默认10000）后强制 flush
         if (unflushedMessages >= config.flushInterval)
           flush()
 
@@ -717,6 +719,7 @@ class Log(val dir: File,
     debug("Flushing log '" + name + " up to offset " + offset + ", last flushed: " + lastFlushTime + " current time: " +
           time.milliseconds + " unflushed = " + unflushedMessages)
     for(segment <- logSegments(this.recoveryPoint, offset))
+      //遍历所有segment，对需要 flush 的segment进行处理
       segment.flush()
     lock synchronized {
       if(offset > this.recoveryPoint) {
