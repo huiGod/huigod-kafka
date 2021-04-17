@@ -427,7 +427,7 @@ class Partition(val topic: String,
     //获取读锁
     val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock) {
       val leaderReplicaOpt = leaderReplicaIfLocal()
-      //判断 partition 在本地是否是leader
+      //判断是否是leader partition
       leaderReplicaOpt match {
         case Some(leaderReplica) =>
 

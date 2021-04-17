@@ -101,6 +101,7 @@ class Log(val dir: File,
   loadSegments()
 
   /* Calculate the offset of the next message */
+  //表示LEO offset
   @volatile var nextOffsetMetadata = new LogOffsetMetadata(activeSegment.nextOffset(), activeSegment.baseOffset, activeSegment.size.toInt)
 
   val topicAndPartition: TopicAndPartition = Log.parseTopicPartitionName(dir)
@@ -317,7 +318,7 @@ class Log(val dir: File,
    * @return Information about the appended messages including the first and last offset.
    */
   def append(messages: ByteBufferMessageSet, assignOffsets: Boolean = true): LogAppendInfo = {
-    //分析校验消息格式
+    //校验消息格式并组装
     val appendInfo = analyzeAndValidateMessageSet(messages)
 
     // if we have any valid messages, append them to the log
@@ -379,6 +380,7 @@ class Log(val dir: File,
             throw new IllegalArgumentException("Out of order offsets found in " + messages)
         }
 
+        //最大不能超过1G
         // check messages set size may be exceed config.segmentSize
         if (validMessages.sizeInBytes > config.segmentSize) {
           throw new RecordBatchTooLargeException("Message set size is %d bytes which exceeds the maximum configured segment size of %d."

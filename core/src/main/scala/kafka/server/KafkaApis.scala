@@ -334,7 +334,9 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
 
     // the callback for sending a produce response
-    //每一个请求，都包含了多个分区的一个Batch。所以在执行请求的时候，将每个分区的Batch数据追加到对应分区的磁盘文件中，最终每个分区都对应一个结果
+    //每个请求都是发送给同一个broker，一个broker上可能有多个leader partition
+    //所以请求中可能是多个partition-->batch的对应
+    //所以在执行请求的时候，将每个分区的Batch数据追加到对应分区的磁盘文件中，最终每个分区都对应一个结果
     def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]) {
 
       val mergedResponseStatus = responseStatus ++ unauthorizedRequestInfo.mapValues(_ =>

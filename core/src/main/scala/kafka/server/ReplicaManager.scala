@@ -337,10 +337,11 @@ class ReplicaManager(val config: KafkaConfig,
   /**
    * Append messages to leader replicas of the partition, and wait for them to be replicated to other replicas;
    * the callback function will be triggered either when timeout or the required acks are satisfied
+   *
    * 将消息发送给 leader partition，并且等待其复制给其他的 replica。callback函数将会在超时或者满足acks要求的情况下被触发调用
-    *
-    * 每个分区对应一个MessageSet，集合中的每条消息都有固定的格式
-    * 回调函数的结构，也是每个分区对应一个PartitionResponse，响应中包含对一个分区磁盘文件的数据写入的结果
+   *
+   * 每个分区对应一个MessageSet，集合中的每条消息都有固定的格式
+   * 回调函数的结构，也是每个分区对应一个PartitionResponse，响应中包含对一个分区磁盘文件的数据写入的结果
    *
    */
   def appendMessages(timeout: Long,
@@ -355,7 +356,7 @@ class ReplicaManager(val config: KafkaConfig,
     //0/all:需要等待所有的副本都拉取数据才能返回
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = SystemTime.milliseconds
-      //将消息写入每个分区的磁盘文件中，获取到对应的结果
+      //将消息写入本地的leader partition分区磁盘文件，并返回结果
       val localProduceResults = appendToLocalLog(internalTopicsAllowed, messagesPerPartition, requiredAcks)
       debug("Produce to local log in %d ms".format(SystemTime.milliseconds - sTime))
 
@@ -434,7 +435,7 @@ class ReplicaManager(val config: KafkaConfig,
           Some(new InvalidTopicException("Cannot append to internal topic %s".format(topicPartition.topic)))))
       } else {
         try {
-          //获取分区对应的Partition对象
+          //获取分区对应的Partition对象，当前broker保存了所有partition信息
           val partitionOpt = getPartition(topicPartition.topic, topicPartition.partition)
           val info = partitionOpt match {
             case Some(partition) =>

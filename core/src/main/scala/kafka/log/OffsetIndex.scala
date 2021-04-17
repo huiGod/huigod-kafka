@@ -204,7 +204,7 @@ class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long,
   
   /**
    * Append an entry for the given offset/location pair to the index. This entry must have a larger offset than all subsequent entries.
-    * 每8个字节就是一条稀疏索引，写入2个 Int类型数据，一个是基于当前 segment 相对逻辑 offset，一个是物理 offset
+   * 每8个字节就是一条稀疏索引，写入2个 Int类型数据，一个是基于当前 segment 相对逻辑 offset，一个是物理 offset
    */
   def append(offset: Long, position: Int) {
     inLock(lock) {

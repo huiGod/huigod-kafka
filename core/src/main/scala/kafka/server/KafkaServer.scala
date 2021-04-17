@@ -215,7 +215,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
         //处理RequestChannel中请求队列的线程池
         apis = new KafkaApis(socketServer.requestChannel, replicaManager, groupCoordinator,
           kafkaController, zkUtils, config.brokerId, config, metadataCache, metrics, authorizer)
-        //numIoThreads是业务处理线程，默认8。这里初始化并启动线程
+        //numIoThreads是业务处理线程，默认8
         requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, config.numIoThreads)
         brokerState.newState(RunningAsBroker)
 
