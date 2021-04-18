@@ -373,6 +373,7 @@ class KafkaApis(val requestChannel: RequestChannel,
             )
             requestChannel.closeConnection(request.processor, request)
           } else {
+            //将回调结果返回至responseQueues队列
             requestChannel.noOperation(request.processor, request)
           }
         } else {
@@ -384,7 +385,7 @@ class KafkaApis(val requestChannel: RequestChannel,
             // updating this part of the code to handle it properly.
             case version => throw new IllegalArgumentException(s"Version `$version` of ProduceRequest is not handled. Code must be updated.")
           }
-
+          //将回调结果返回至responseQueues队列
           requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, respHeader, respBody)))
         }
       }

@@ -37,6 +37,9 @@ import com.yammer.metrics.core.Gauge
 
 /**
  *  Abstract class for fetching data from multiple partitions from the same broker.
+ *
+ *  负责从同一个broker拉取多个partition的数据
+ *  线程的run方法在父类中
  */
 abstract class AbstractFetcherThread(name: String,
                                      clientId: String,
@@ -48,6 +51,7 @@ abstract class AbstractFetcherThread(name: String,
   type REQ <: FetchRequest
   type PD <: PartitionData
 
+  //保存每个partition对应的fetch offset
   private val partitionMap = new mutable.HashMap[TopicAndPartition, PartitionFetchState] // a (topic, partition) -> partitionFetchState map
   private val partitionMapLock = new ReentrantLock
   private val partitionMapCond = partitionMapLock.newCondition()
@@ -83,9 +87,11 @@ abstract class AbstractFetcherThread(name: String,
     fetcherLagStats.unregister()
   }
 
+  //线程的业务执行逻辑
   override def doWork() {
 
     val fetchRequest = inLock(partitionMapLock) {
+      //对一批follower的leader partition在同一个broker上，封装为同一个请求
       val fetchRequest = buildFetchRequest(partitionMap)
       if (fetchRequest.isEmpty) {
         trace("There are no active partitions. Back off for %d ms before sending a fetch request".format(fetchBackOffMs))

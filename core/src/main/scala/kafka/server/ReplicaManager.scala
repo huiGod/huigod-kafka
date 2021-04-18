@@ -118,6 +118,7 @@ class ReplicaManager(val config: KafkaConfig,
     new Partition(t, p, time, this)
   })
   private val replicaStateChangeLock = new Object
+  //负责拉取replica的组件
   val replicaFetcherManager = new ReplicaFetcherManager(config, this, metrics, jTime, threadNamePrefix)
 
   //每个 leader 写入了一条消息，leader partition 的 LEO 会推进一位
@@ -352,14 +353,15 @@ class ReplicaManager(val config: KafkaConfig,
 
     //检验ack必须是-1|1|0
     //1:leader 写入成功即可
-    //-1:客户端不需要等待返回值
-    //0/all:需要等待所有的副本都拉取数据才能返回
+    //-1/all:需要等待ISR集合中的所有副本都确认收到消息之后才能正确地收到响应的结果
+    //0:不管写入是否成功直接返回
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = SystemTime.milliseconds
       //将消息写入本地的leader partition分区磁盘文件，并返回结果
       val localProduceResults = appendToLocalLog(internalTopicsAllowed, messagesPerPartition, requiredAcks)
       debug("Produce to local log in %d ms".format(SystemTime.milliseconds - sTime))
 
+      //封装写入本地数据的结果
       val produceStatus = localProduceResults.map { case (topicPartition, result) =>
         topicPartition ->
                 ProducePartitionStatus(
@@ -367,7 +369,7 @@ class ReplicaManager(val config: KafkaConfig,
                   new PartitionResponse(result.errorCode, result.info.firstOffset, result.info.timestamp)) // response status
       }
 
-      //判断是否需要延时
+      //判断是否需要等待其他replicate返回响应
       if (delayedRequestRequired(requiredAcks, messagesPerPartition, localProduceResults)) {
         // create delayed produce operation
         val produceMetadata = ProduceMetadata(requiredAcks, produceStatus)
@@ -383,6 +385,7 @@ class ReplicaManager(val config: KafkaConfig,
 
       } else {
         // we can respond immediately
+        // 不需要等待其他replicate结果，直接回调并返回
         val produceResponseStatus = produceStatus.mapValues(status => status.responseStatus)
         responseCallback(produceResponseStatus)
       }
@@ -769,12 +772,22 @@ class ReplicaManager(val config: KafkaConfig,
   /*
    * Make the current broker to become follower for a given set of partitions by:
    *
+   * 如果当前broker感知到被分配了一些follower partition之后，会调用该方法，为这些follower partition创建一个fetcher线程，
+   * 接下来fetcher线程就会负责去拉取数据到本地replica
+   *
+   * 从leader partition集合中移除制定的follower partition
    * 1. Remove these partitions from the leader partitions set.
+   * 将replica标记为follower，让producer不会继续写入数据
    * 2. Mark the replicas as followers so that no more data can be added from the producer clients.
+   * 停止已有的ReplicaFetcher线程
    * 3. Stop fetchers for these partitions so that no more data can be added by the replica fetcher threads.
+   * 清理数据并记录offset
    * 4. Truncate the log and checkpoint offsets for these partitions.
+   * 清理延时调度的请求
    * 5. Clear the produce and fetch requests in the purgatory
+   * 给新的leader replica添加fetcher线程
    * 6. If the broker is not shutting down, add the fetcher to the new leaders.
+   *
    *
    * The ordering of doing these steps make sure that the replicas in transition will not
    * take any more messages before checkpointing offsets so that all messages before the checkpoint
@@ -862,6 +875,7 @@ class ReplicaManager(val config: KafkaConfig,
           new TopicAndPartition(partition) -> BrokerAndInitialOffset(
             metadataCache.getAliveBrokers.find(_.id == partition.leaderReplicaIdOpt.get).get.getBrokerEndPoint(config.interBrokerSecurityProtocol),
             partition.getReplica().get.logEndOffset.messageOffset)).toMap
+        //为一批follower partition添加fetcher线程
         replicaFetcherManager.addFetcherForPartitions(partitionsToMakeFollowerWithLeaderAndOffset)
 
         partitionsToMakeFollower.foreach { partition =>
