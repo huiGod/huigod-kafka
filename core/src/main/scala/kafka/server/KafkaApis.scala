@@ -76,6 +76,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       ApiKeys.forId(request.requestId) match {
           //生产者发送请求处理逻辑
         case ApiKeys.PRODUCE => handleProducerRequest(request)
+          //处理 broker 发送的 fetchRequest 请求
         case ApiKeys.FETCH => handleFetchRequest(request)
         case ApiKeys.LIST_OFFSETS => handleOffsetRequest(request)
         case ApiKeys.METADATA => handleTopicMetadataRequest(request)
@@ -502,6 +503,14 @@ class KafkaApis(val requestChannel: RequestChannel,
       sendResponseCallback(Map.empty)
     else {
       // call the replica manager to fetch messages from the local replica
+      //从本地  leader replica 响应其他 replica 的 fetch 请求
+
+
+      //1.先会尝试从本地磁盘中读取指定 offset 之后的数据
+      //2.如果能够读取到，通过回调函数直接返回
+      //3.后续还要考虑更新和维护 HW/ISR
+      //4.无法读取新的数据需要放入时间轮延时来执行
+      //5.如果 leader 有心的数据写入，唤醒时间轮中等待的 fetchRequest 来执行数据的拉取
       replicaManager.fetchMessages(
         fetchRequest.maxWait.toLong,
         fetchRequest.replicaId,

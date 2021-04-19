@@ -515,6 +515,8 @@ class Log(val dir: File,
     if(startOffset == next)
       return FetchDataInfo(currentNextOffsetMetadata, MessageSet.Empty)
 
+    //根据需要读取的起始 offset定位出 segment 文件
+    //segment baseOffset 刚好小于指定 offset 的 segment file
     var entry = segments.floorEntry(startOffset)
 
     // attempt to read beyond the log end offset is an error
@@ -542,6 +544,7 @@ class Log(val dir: File,
           entry.getValue.size
         }
       }
+      //从 segment file 读取数据
       val fetchInfo = entry.getValue.read(startOffset, maxOffset, maxLength, maxPosition)
       if(fetchInfo == null) {
         entry = segments.higherEntry(entry.getKey)

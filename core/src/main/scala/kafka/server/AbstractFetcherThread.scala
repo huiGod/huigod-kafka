@@ -91,7 +91,7 @@ abstract class AbstractFetcherThread(name: String,
   override def doWork() {
 
     val fetchRequest = inLock(partitionMapLock) {
-      //对一批follower的leader partition在同一个broker上，封装为同一个请求
+      //针对 leader 在同一个 broker 上的多个 follower partiton 构建一个 fetchRequest
       val fetchRequest = buildFetchRequest(partitionMap)
       if (fetchRequest.isEmpty) {
         trace("There are no active partitions. Back off for %d ms before sending a fetch request".format(fetchBackOffMs))
@@ -110,6 +110,7 @@ abstract class AbstractFetcherThread(name: String,
 
     try {
       trace("Issuing to broker %d of fetch request %s".format(sourceBroker.id, fetchRequest))
+      //处理拉取请求，阻塞等待获取响应结果
       responseData = fetch(fetchRequest)
     } catch {
       case t: Throwable =>
@@ -124,6 +125,7 @@ abstract class AbstractFetcherThread(name: String,
     }
     fetcherStats.requestRate.mark()
 
+    //处理 fetchRequest结果，写入磁盘文件，更新 LEO
     if (responseData.nonEmpty) {
       // process fetched data
       inLock(partitionMapLock) {

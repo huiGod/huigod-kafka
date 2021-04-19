@@ -226,6 +226,7 @@ class ReplicaFetcherThread(name: String,
   }
 
   protected def fetch(fetchRequest: FetchRequest): Map[TopicAndPartition, PartitionData] = {
+    //发送拉取数据给 broker
     val clientResponse = sendRequest(ApiKeys.FETCH, Some(fetchRequestVersion), fetchRequest.underlying)
     new FetchResponse(clientResponse.responseBody).responseData.asScala.map { case (key, value) =>
       TopicAndPartition(key.topic, key.partition) -> new PartitionData(value)
@@ -236,9 +237,11 @@ class ReplicaFetcherThread(name: String,
     import kafka.utils.NetworkClientBlockingOps._
     val header = apiVersion.fold(networkClient.nextRequestHeader(apiKey))(networkClient.nextRequestHeader(apiKey, _))
     try {
+      //阻塞等待连接是否就绪
       if (!networkClient.blockingReady(sourceNode, socketTimeout)(time))
         throw new SocketTimeoutException(s"Failed to connect within $socketTimeout ms")
       else {
+        //封装需要发送的消息
         val send = new RequestSend(sourceBroker.id.toString, header, request.toStruct)
         val clientRequest = new ClientRequest(time.milliseconds(), true, send, null)
         networkClient.blockingSendAndReceive(clientRequest)(time)
@@ -272,9 +275,11 @@ class ReplicaFetcherThread(name: String,
 
     partitionMap.foreach { case ((TopicAndPartition(topic, partition), partitionFetchState)) =>
       if (partitionFetchState.isActive)
+        //从 leader partition 拉取数据的时候，每个分区需要指定拉取的起始 offset，以及拉取的数据量大小replica.fetch.max.bytes=1M
         requestMap(new TopicPartition(topic, partition)) = new JFetchRequest.PartitionData(partitionFetchState.offset, fetchSize)
     }
 
+    //一次拉取的请求，至少需要拉取replica.fetch.min.bytes=1个字节大小的数据，否则会最多等待replica.fetch.wait.max.ms=500ms
     new FetchRequest(new JFetchRequest(replicaId, maxWait, minBytes, requestMap.asJava))
   }
 

@@ -497,11 +497,14 @@ class ReplicaManager(val config: KafkaConfig,
                     fetchMinBytes: Int,
                     fetchInfo: immutable.Map[TopicAndPartition, PartitionFetchInfo],
                     responseCallback: Map[TopicAndPartition, FetchResponsePartitionData] => Unit) {
+    //判断是 follower 的逻辑
     val isFromFollower = replicaId >= 0
     val fetchOnlyFromLeader: Boolean = replicaId != Request.DebuggingConsumerId
     val fetchOnlyCommitted: Boolean = ! Request.isValidBrokerId(replicaId)
 
     // read from local logs
+    //从本地磁盘读取数据，指定了每个分区的起始 offset
+    //一定会用到稀疏索引，先找到 offset 在 segment file 中的物理位置，从该物理位置开始读取
     val logReadResults = readFromLocalLog(fetchOnlyFromLeader, fetchOnlyCommitted, fetchInfo)
 
     // if the fetch comes from the follower,
@@ -542,6 +545,8 @@ class ReplicaManager(val config: KafkaConfig,
 
   /**
    * Read from a single topic/partition at the given offset upto maxSize bytes
+   * 遍历后从每个 partition 读取指定 offset 开始的 maxSize 字节数据
+   *
    */
   def readFromLocalLog(fetchOnlyFromLeader: Boolean,
                        readOnlyCommitted: Boolean,
@@ -557,6 +562,7 @@ class ReplicaManager(val config: KafkaConfig,
 
           // decide whether to only fetch from leader
           val localReplica = if (fetchOnlyFromLeader)
+            //获取 leader Partition
             getLeaderReplicaIfLocal(topic, partition)
           else
             getReplicaOrException(topic, partition)
@@ -576,6 +582,7 @@ class ReplicaManager(val config: KafkaConfig,
           val initialLogEndOffset = localReplica.logEndOffset
           val logReadInfo = localReplica.log match {
             case Some(log) =>
+              //从 Log 读取数据
               log.read(offset, fetchSize, maxOffsetOpt)
             case None =>
               error("Leader for partition [%s,%d] does not have a local log".format(topic, partition))

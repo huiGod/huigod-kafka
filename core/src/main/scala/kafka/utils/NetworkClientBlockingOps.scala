@@ -75,8 +75,10 @@ class NetworkClientBlockingOps(val client: NetworkClient) extends AnyVal {
    * care.
    */
   def blockingSendAndReceive(request: ClientRequest)(implicit time: JTime): ClientResponse = {
+    //发送数据
     client.send(request, time.milliseconds())
 
+    //阻塞等待响应
     pollContinuously { responses =>
       val response = responses.find { response =>
         response.request.request.header.correlationId == request.request.header.correlationId
