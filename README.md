@@ -10,6 +10,7 @@ Apache Kafka源码学习
 
 # broker原理
 
+## fetch 数据的时候 replicaId 为什么是1个，而不是所有 follower replica
 ## 网络模型
 ## HW/LEO 机制
 ## isr

@@ -234,6 +234,7 @@ class ReplicaManager(val config: KafkaConfig,
 
   def startup() {
     // start ISR expiration thread
+    //后台线程检测是否需要将 replica 从 ISR 列表中移除
     scheduler.schedule("isr-expiration", maybeShrinkIsr, period = config.replicaLagTimeMaxMs, unit = TimeUnit.MILLISECONDS)
     scheduler.schedule("isr-change-propagation", maybePropagateIsrChanges, period = 2500L, unit = TimeUnit.MILLISECONDS)
   }
@@ -509,6 +510,11 @@ class ReplicaManager(val config: KafkaConfig,
 
     // if the fetch comes from the follower,
     // update its corresponding log end offset
+    //请求来自 follower fetch，则更新当前 leader 所维护的 follower 的 LEO，用于后续推进 HW offset
+
+    //每次 follower 发送一个 fetch 到 leader，都会带上自己的 LEO，因为 fetch 的时候是接着 LEO offset 拉取数据的
+    //所以 leader 是可以感知到 follower 的 LEO，每次收到 fetch 都会自己维护每个 follower的 LEO。
+    //然后判断是否每个 follower 的 LEO 超出了当前的 HW，如果是那么所维护的 HW 可以往前推移
     if(Request.isValidBrokerId(replicaId))
       updateFollowerLogReadResults(replicaId, logReadResults)
 
@@ -524,8 +530,10 @@ class ReplicaManager(val config: KafkaConfig,
     if(timeout <= 0 || fetchInfo.size <= 0 || bytesReadable >= fetchMinBytes || errorReadingData) {
       val fetchPartitionData = logReadResults.mapValues(result =>
         FetchResponsePartitionData(result.errorCode, result.hw, result.info.messageSet))
+      //结果直接回调给 broker
       responseCallback(fetchPartitionData)
     } else {
+      //如果没有 fetch 到数据，构造延时任务放入时间轮
       // construct the fetch results from the read results
       val fetchPartitionStatus = logReadResults.map { case (topicAndPartition, result) =>
         (topicAndPartition, FetchPartitionStatus(result.info.fetchOffsetMetadata, fetchInfo.get(topicAndPartition).get))
@@ -591,6 +599,7 @@ class ReplicaManager(val config: KafkaConfig,
 
           val readToEndOfLog = initialLogEndOffset.messageOffset - logReadInfo.fetchOffsetMetadata.messageOffset <= 0
 
+          //封装结果数据
           LogReadResult(logReadInfo, localReplica.highWatermark.messageOffset, fetchSize, readToEndOfLog, None)
         } catch {
           // NOTE: Failed fetch requests metric is not incremented for known exceptions since it
@@ -919,6 +928,7 @@ class ReplicaManager(val config: KafkaConfig,
     readResults.foreach { case (topicAndPartition, readResult) =>
       getPartition(topicAndPartition.topic, topicAndPartition.partition) match {
         case Some(partition) =>
+          //更新每个follower replica 下的 LEO
           partition.updateReplicaLogReadResult(replicaId, readResult)
 
           // for producer requests with ack > 1, we need to check

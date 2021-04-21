@@ -441,6 +441,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
 
     // the callback for sending a fetch response
+    //拉取到数据后调用该回调函数，将数据发送给请求方 broker
     def sendResponseCallback(responsePartitionData: Map[TopicAndPartition, FetchResponsePartitionData]) {
 
       val convertedPartitionData =
@@ -477,10 +478,12 @@ class KafkaApis(val requestChannel: RequestChannel,
         BrokerTopicStats.getBrokerAllTopicsStats().bytesOutRate.mark(data.messages.sizeInBytes)
       }
 
+      //消息来自 follower fetch，所以执行该回调
       def fetchResponseCallback(delayTimeMs: Int) {
         trace(s"Sending fetch response to client ${fetchRequest.clientId} of " +
           s"${convertedPartitionData.values.map(_.messages.sizeInBytes).sum} bytes")
         val response = FetchResponse(fetchRequest.correlationId, mergedPartitionData, fetchRequest.versionId, delayTimeMs)
+        //将数据放入responseQueues发送给 follower broker
         requestChannel.sendResponse(new RequestChannel.Response(request, new FetchResponseSend(request.connectionId, response)))
       }
 

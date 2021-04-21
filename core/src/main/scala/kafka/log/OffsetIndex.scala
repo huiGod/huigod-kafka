@@ -137,10 +137,12 @@ class OffsetIndex(@volatile private[this] var _file: File, val baseOffset: Long,
   def lookup(targetOffset: Long): OffsetPosition = {
     maybeLock(lock) {
       val idx = mmap.duplicate
+      //通过二分法查找.index，找出小于 等于目标 offset 的最大 offset
       val slot = indexSlotFor(idx, targetOffset)
       if(slot == -1)
         OffsetPosition(baseOffset, 0)
       else
+      //构造segment file 相对 offset--》物理位置需要读取的字节数
         OffsetPosition(baseOffset + relativeOffset(idx, slot), physical(idx, slot))
       }
   }

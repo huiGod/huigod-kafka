@@ -148,6 +148,7 @@ abstract class AbstractFetcherThread(name: String,
                     fetcherLagStats.getAndMaybePut(topic, partitionId).lag = Math.max(0L, partitionData.highWatermark - newOffset)
                     fetcherStats.byteRate.mark(validBytes)
                     // Once we hand off the partition data to the subclass, we can't mess with it any more in this thread
+                    //处理 fetch 的响应数据
                     processPartitionData(topicAndPartition, currentPartitionFetchState.offset, partitionData)
                   } catch {
                     case ime: CorruptRecordException =>
