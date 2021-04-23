@@ -89,6 +89,7 @@ object TopicCommand extends Logging {
       allTopics
   }
 
+  //通过命令创建topic
   def createTopic(zkUtils: ZkUtils, opts: TopicCommandOptions) {
     val topic = opts.options.valueOf(opts.topicOpt)
     val configs = parseTopicConfigsToBeAdded(opts)

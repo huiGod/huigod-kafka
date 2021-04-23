@@ -331,7 +331,9 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
       partitionStateMachine.registerListeners()
       replicaStateMachine.registerListeners()
       initializeControllerContext()
+      //如果 broker 有变动，controller 通过 zk 感知到后会发送给其他所有 broker
       replicaStateMachine.startup()
+      //注册针对/broker/topics 的监听
       partitionStateMachine.startup()
       // register the partition change listeners for all existing topics on failover
       controllerContext.allTopics.foreach(topic => partitionStateMachine.registerPartitionChangeListener(topic))
@@ -681,6 +683,7 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
       info("Controller starting up")
       registerSessionExpirationListener()
       isRunning = true
+      //执行 controller 选举流程
       controllerElector.startup
       info("Controller startup complete")
     }

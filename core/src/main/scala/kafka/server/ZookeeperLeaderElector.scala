@@ -46,22 +46,26 @@ class ZookeeperLeaderElector(controllerContext: ControllerContext,
 
   def startup {
     inLock(controllerContext.controllerLock) {
+      //在/controller 这个 znode 上注册一个监听器，有其他 broker 竞争成为了 controller 或者宕机都会感知到
       controllerContext.zkUtils.zkClient.subscribeDataChanges(electionPath, leaderChangeListener)
       elect
     }
   }
 
   private def getControllerID(): Int = {
+    //尝试从/controller 这个 znode 上去读取值，没有读取到默认返回-1
     controllerContext.zkUtils.readDataMaybeNull(electionPath)._1 match {
        case Some(controller) => KafkaController.parseControllerId(controller)
        case None => -1
     }
   }
 
+  //发起在 zk 上的选举
   def elect: Boolean = {
     val timestamp = SystemTime.milliseconds.toString
     val electString = Json.encode(Map("version" -> 1, "brokerid" -> brokerId, "timestamp" -> timestamp))
-   
+
+    //从 zk 读取 controllerId
    leaderId = getControllerID 
     /* 
      * We can get here during the initial startup and the handleDeleted ZK callback. Because of the potential race condition, 
@@ -70,10 +74,13 @@ class ZookeeperLeaderElector(controllerContext: ControllerContext,
      */
     if(leaderId != -1) {
        debug("Broker %d has been elected as leader, so stopping the election process.".format(leaderId))
-       return amILeader
+      //集群中已经存在 controller
+      return amILeader
     }
 
+    //否则尝试竞争成为 controller
     try {
+      //尝试去 zk 创建/controller  临时节点，值为当前节点的信息
       val zkCheckedEphemeral = new ZKCheckedEphemeral(electionPath,
                                                       electString,
                                                       controllerContext.zkUtils.zkConnection.getZookeeper,
@@ -81,8 +88,10 @@ class ZookeeperLeaderElector(controllerContext: ControllerContext,
       zkCheckedEphemeral.create()
       info(brokerId + " successfully elected as leader")
       leaderId = brokerId
+      //创建成功则成为 controller
       onBecomingLeader()
     } catch {
+      //其他 broker 竞争成功，则抛出异常
       case e: ZkNodeExistsException =>
         // If someone else has written the path, then
         leaderId = getControllerID 
@@ -143,6 +152,7 @@ class ZookeeperLeaderElector(controllerContext: ControllerContext,
           .format(brokerId, dataPath))
         if(amILeader)
           onResigningAsLeader()
+        //如果controller 宕机，则重新尝试竞争选举成为 controller
         elect
       }
     }

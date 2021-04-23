@@ -295,6 +295,7 @@ class ZkUtils(val zkClient: ZkClient,
 
   private def registerBrokerInZk(brokerIdPath: String, brokerInfo: String) {
     try {
+      //创建临时节点并注册
       val zkCheckedEphemeral = new ZKCheckedEphemeral(brokerIdPath,
                                                       brokerInfo,
                                                       zkConnection.getZookeeper,

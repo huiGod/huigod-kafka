@@ -36,6 +36,8 @@ import org.apache.zookeeper.Watcher.Event.KeeperState
  *   
  * Right now our definition of health is fairly naive. If we register in zk we are healthy, otherwise
  * we are dead.
+  *
+  * 负责把每个 Broker 注册到 zk 上去，使用的是 zk 临时节点，如果注册成功说明是 health，如果broker 宕机，则临时节点删除，此时不是 health
  */
 class KafkaHealthcheck(brokerId: Int,
                        advertisedEndpoints: Map[SecurityProtocol, EndPoint],
@@ -53,6 +55,7 @@ class KafkaHealthcheck(brokerId: Int,
 
   /**
    * Register this broker as "alive" in zookeeper
+    * 将 broker 注册到 zk
    */
   def register() {
     val jmxPort = System.getProperty("com.sun.management.jmxremote.port", "-1").toInt

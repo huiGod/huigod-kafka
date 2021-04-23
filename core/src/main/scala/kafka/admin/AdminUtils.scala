@@ -399,8 +399,11 @@ object AdminUtils extends Logging {
                   replicationFactor: Int,
                   topicConfig: Properties = new Properties,
                   rackAwareMode: RackAwareMode = RackAwareMode.Enforced) {
+    //从 zk获取所有broker 元数据
     val brokerMetadatas = getBrokerMetadatas(zkUtils, rackAwareMode)
+    //均匀地将topic 指定的 parititon 分配给所有的broker
     val replicaAssignment = AdminUtils.assignReplicasToBrokers(brokerMetadatas, partitions, replicationFactor)
+    //将分配好的 partition 注册到 zk 中
     AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, topic, replicaAssignment, topicConfig)
   }
 
