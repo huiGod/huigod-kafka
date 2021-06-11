@@ -246,8 +246,10 @@ public class NetworkClient implements KafkaClient {
     @Override
     public void send(ClientRequest request, long now) {
         String nodeId = request.request().destination();
+        //判断节点是否准备就绪发送消息
         if (!canSendRequest(nodeId))
             throw new IllegalStateException("Attempt to send a request to node " + nodeId + " which is not ready.");
+        //发送消息
         doSend(request, now);
     }
 
@@ -258,7 +260,7 @@ public class NetworkClient implements KafkaClient {
      */
     private void doSend(ClientRequest request, long now) {
         request.setSendTimeMs(now);
-        //将请求添加到inFlightRequests中的队列
+        //将请求添加到inFlightRequests中的队列，将请求添加到inFlightRequests中的队列，并且是添加到队头，也就是最近的请求在队头
         //max.in.flight.requests.per.connection：最多允许发送给同一个 broker 的请求有多少没有返回响应
         this.inFlightRequests.add(request);
         selector.send(request.request());
@@ -275,9 +277,10 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public List<ClientResponse> poll(long timeout, long now) {
-        //metadataUpdater是更新元数据组件
+        //metadataUpdater是更新元数据组件，如果满足条件会发送更新元数据请求
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            //多路复用处理网络IO操作
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -436,11 +439,14 @@ public class NetworkClient implements KafkaClient {
      * @param now The current time
      */
     private void handleTimedOutRequests(List<ClientResponse> responses, long now) {
+        //判断队尾请求是否超时，查询出需要超时的节点
         List<String> nodeIds = this.inFlightRequests.getNodesWithTimedOutRequests(now, this.requestTimeoutMs);
         for (String nodeId : nodeIds) {
             // close connection to the node
+            //关闭同broker的了解，释放相关资源
             this.selector.close(nodeId);
             log.debug("Disconnecting from node {} due to request timeout.", nodeId);
+            //处理连接断开资源释放
             processDisconnection(responses, nodeId, now);
         }
 
@@ -455,17 +461,20 @@ public class NetworkClient implements KafkaClient {
      * @param responses The list of responses to update
      * @param now The current time
      * 一个 kafkaChannel 只能绑定一个 send，因此一次 IO 处理流程，对同一个 broker 也一定只能发送一个 send
-     * 这里获取的inFlightRequests队列队头元素也一定是刚刚发送完的 send
+     * 这里获取的inFlightRequests队列队头元素也一定是刚刚发送完的 send。因为发送完成才能够去发送下一个send，才会放入到inFlightRequests队列中去
      */
     private void handleCompletedSends(List<ClientResponse> responses, long now) {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
-            //获取completedSends队列队头元素，一定是刚刚发送出去的request数据（只是peek没有poll）
+            //从InFlightRequests队列获取channel对应队列的队头元素（只是peek没有poll）
+            //最近发送出去的消息放在InFlightRequests的队头，这里获取到的请求是最近发送出去的请求
             ClientRequest request = this.inFlightRequests.lastSent(send.destination());
             //通过acks计算是否需要等待请求的响应，如果不需要这里可以直接从inFlightRequests队列里面移出去
+            //acks != 0 == expectResponse
             if (!request.expectResponse()) {
                 //如果不需要返回响应直接poll掉即可
                 this.inFlightRequests.completeLastSent(send.destination());
+                //直接封装响应
                 responses.add(new ClientResponse(request, now, false, null));
             }
         }
@@ -478,17 +487,20 @@ public class NetworkClient implements KafkaClient {
      * @param now The current time
      *
      *
-     * 对于同一个broker，连续发送多个request出去，但是会在inFlighRequest里面排队,FlighRequests -> <请求1，请求2，请求3，请求4，请求5>
-     * 此时对broker读取响应，响应1，响应2，都在stagedReceives -> 响应1放在completedReceives -> 只会获取到响应1
-     * 就是直接从inFlighRequests里面移除掉请求1，按照顺序，先发送请求1，那么就应该先获取到请求1对应的响应1，而不是响应2
+     * 对于同一个broker，连续发送多个request出去，但是会在inFlighRequest里面排队，并且是从队头开始放入
+     * 例如FlighRequests -> <请求5，请求4，请求3，请求2，请求1>
+     * 此时对broker读取响应，加入一次性读取到完整的响应1、响应2，首先会放入队列stagedReceives中 -> 然后统一将队头响应1放在completedReceives队列中 -> 也就是这里的处理只会获取到响应1
+     * 然后从inFlighRequests里面移除掉最先发送的请求1即可
      */
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
             String source = receive.source();
+            //获取最先发送的请求，poll操作
             ClientRequest req = inFlightRequests.completeNext(source);
             Struct body = parseResponse(receive.payload(), req.request().header());
-            //处理已经完成的响应
+            //如果响应头是元数据则返回true，否则返回false，用于解析响应处理元数据的更新
             if (!metadataUpdater.maybeHandleCompletedReceive(req, now, body))
+                //封装响应返回
                 responses.add(new ClientResponse(req, now, false, body));
         }
     }
@@ -502,6 +514,7 @@ public class NetworkClient implements KafkaClient {
     private void handleDisconnections(List<ClientResponse> responses, long now) {
         for (String node : this.selector.disconnected()) {
             log.debug("Node {} disconnected.", node);
+            //修改连接状态，清空连接对应inFlightRequests队列请求
             processDisconnection(responses, node, now);
         }
         // we got a disconnect so we should probably refresh our metadata and see if that broker is dead

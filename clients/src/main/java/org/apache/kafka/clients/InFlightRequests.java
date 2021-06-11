@@ -41,6 +41,7 @@ final class InFlightRequests {
             reqs = new ArrayDeque<>();
             this.requests.put(request.request().destination(), reqs);
         }
+        //添加到队头
         reqs.addFirst(request);
     }
 
@@ -88,7 +89,7 @@ final class InFlightRequests {
         Deque<ClientRequest> queue = requests.get(node);
         //inFlightRequests，有一个参数可以设置这个东西，默认是对同一个Broker同一时间最多容忍5个请求发送过去但是还没有收到响应，
         //所以如果对一个Broker已经发送了5个请求，都没收到响应，此时就不可以继续发送了
-        //如果队列中队头元素存在但是没有发送完成（出现拆包），则返回 false
+        //如果队列中队头元素存在但是没有发送完成（出现拆包），则返回 false，也就是不能再接受请求去发送，需要继续发送拆包数据
         return queue == null || queue.isEmpty() ||
                (queue.peekFirst().request().completed() && queue.size() < this.maxInFlightRequestsPerConnection);
     }
@@ -139,6 +140,7 @@ final class InFlightRequests {
         List<String> nodeIds = new LinkedList<String>();
         for (String nodeId : requests.keySet()) {
             if (inFlightRequestCount(nodeId) > 0) {
+                //只需要判断队列队尾请求是否超时即可，因为队尾是最久发送出去的请求
                 ClientRequest request = requests.get(nodeId).peekLast();
                 long timeSinceSend = now - request.sendTimeMs();
                 if (timeSinceSend > requestTimeout) {

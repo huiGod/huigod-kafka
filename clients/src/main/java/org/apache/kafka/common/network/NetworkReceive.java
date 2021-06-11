@@ -87,14 +87,16 @@ public class NetworkReceive implements Receive {
     @Deprecated
     public long readFromReadableChannel(ReadableByteChannel channel) throws IOException {
         int read = 0;
+        //size默认会分配ByteBuffer.allocate(4)
         if (size.hasRemaining()) {
             //读取4个字节数据写入到 size，此时 position=4
             int bytesRead = channel.read(size);
             if (bytesRead < 0)
+                //idea断开连接会发送一个请求，read到的数据时-1，可以参考之类的处理方式
                 throw new EOFException();
             read += bytesRead;
             if (!size.hasRemaining()) {
-                //将position 设置为0，可以从头开始读数据
+                //size是ByteBuffer,rewind可以理解为从之前的写设置为从头开始读读书
                 size.rewind();
                 //读取一个整型数字代表 body 请求体大小
                 int receiveSize = size.getInt();
@@ -103,7 +105,7 @@ public class NetworkReceive implements Receive {
                 if (maxSize != UNLIMITED && receiveSize > maxSize)
                     throw new InvalidReceiveException("Invalid receive (size = " + receiveSize + " larger than " + maxSize + ")");
 
-                //申请固定内存缓冲，供后续从 channel 读取数据存放
+                //申请body数据大小的ByteBuffer，后续从channel读取数据该ByteBuffer
                 this.buffer = ByteBuffer.allocate(receiveSize);
             }
         }
@@ -113,7 +115,7 @@ public class NetworkReceive implements Receive {
                 throw new EOFException();
             read += bytesRead;
         }
-
+        //返回的是已经读取的字节数，后续用来判断是否读取完成了
         return read;
     }
 

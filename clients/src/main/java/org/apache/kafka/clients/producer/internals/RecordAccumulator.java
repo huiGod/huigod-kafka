@@ -104,6 +104,7 @@ public final class RecordAccumulator {
         this.compression = compression;
         this.lingerMs = lingerMs;
         this.retryBackoffMs = retryBackoffMs;
+        //自定义的
         this.batches = new CopyOnWriteMap<>();
         String metricGrpName = "producer-metrics";
         this.free = new BufferPool(totalSize, batchSize, metrics, time, metricGrpName);
@@ -212,7 +213,7 @@ public final class RecordAccumulator {
                 //将消息写入到RecordBatch
                 FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, callback, time.milliseconds()));
 
-                //将当前ByteBuffer（batch）添加到 dq 队列中
+                //将当前ByteBuffer（batch）添加到 dq 队尾
                 dq.addLast(batch);
                 incomplete.add(batch);
                 return new RecordAppendResult(future, dq.size() > 1 || batch.records.isFull(), true);
@@ -227,7 +228,7 @@ public final class RecordAccumulator {
      * resources (like compression streams buffers).
      */
     private RecordAppendResult tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, Deque<RecordBatch> deque) {
-        //获取队列中最近一个 batch
+        //获取队尾 batch
         RecordBatch last = deque.peekLast();
         if (last != null) {
             //将消息写入到 batch 中
@@ -328,20 +329,21 @@ public final class RecordAccumulator {
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         boolean unknownLeadersExist = false;
 
-        //内存是否已经耗尽，可能有业务写数据线程阻塞，无法申请到内存，在等待新的内存块空闲出来才可以创建新的Batch
+        //通过是否有线程通过condition阻塞等待内存释放来判断内存耗尽
         boolean exhausted = this.free.queued() > 0;
-        //遍历所有的batches
+        //遍历所有的partition下的RecordBatch
         for (Map.Entry<TopicPartition, Deque<RecordBatch>> entry : this.batches.entrySet()) {
             TopicPartition part = entry.getKey();
             Deque<RecordBatch> deque = entry.getValue();
 
-            //获取 topic 对应的 leader Partition 所在节点
+            //获取 topic + partition 对应的 leader Partition 所在节点
             Node leader = cluster.leaderFor(part);
             if (leader == null) {
                 //标记有未知 leader partition存在，触发后续拉取元数据
                 unknownLeadersExist = true;
             } else if (!readyNodes.contains(leader) && !muted.contains(part)) {
-                //对 topic 对应的 batch 队列加锁
+                //如果需要保持消息有序，则在batch未发送成功时，禁止继续发送消息，也就是通过muted集合来判断
+                //对 topic + partition 对应的 batch 队列加锁
                 //这里的锁同消息写入 append 方法用的同一个锁，这里都是判断逻辑，都是轻量级操作，分段竞争锁，提升并发能力
                 synchronized (deque) {
                     //仅仅是获取batch 队列的队头 batch，数据的写入是在队列最后一个 batch
@@ -363,6 +365,7 @@ public final class RecordAccumulator {
                         //已经达到batch最长等待发送时间
                         boolean expired = waitedTimeMs >= timeToWaitMs;
                         //判断是否当前 batch 可以发送
+                        //exhausted为true，标识内存没有空闲空间，也需要立即发送数据来释放内存
                         //closed：当前客户端要关闭掉，此时就必须立马把内存缓冲的Batch都发送出去，就是当前强制必须把所有数据都flush出去到网络里面去，此时就必须得发送
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
                         //可以发送，并且不是重试
@@ -421,6 +424,7 @@ public final class RecordAccumulator {
         Map<Integer, List<RecordBatch>> batches = new HashMap<>();
         for (Node node : nodes) {
             int size = 0;
+            //获取leader所在node节点的所有topic+partition信息
             List<PartitionInfo> parts = cluster.partitionsForNode(node.id());
             List<RecordBatch> ready = new ArrayList<>();
             /* to make starvation less likely this loop doesn't start at 0 */

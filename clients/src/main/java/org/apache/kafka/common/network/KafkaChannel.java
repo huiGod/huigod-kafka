@@ -134,16 +134,20 @@ public class KafkaChannel {
         NetworkReceive result = null;
 
         if (receive == null) {
+            //第一次读取数据初始化NetworkReceive对象
             receive = new NetworkReceive(maxReceiveSize, id);
         }
 
+        //从网络连接中读取数据到NetworkReceive中
         receive(receive);
         //判断请求是否完整
         if (receive.complete()) {
             receive.payload().rewind();
             result = receive;
+            //读取完成将NetworkReceive作为结果返回，并且重置receive，使得下一次可以重新读取数据到NetworkReceive
             receive = null;
         }
+        //如果发生拆包，直接返回null，下一次OP_READ事件继续来处理
         return result;
     }
 
@@ -157,14 +161,15 @@ public class KafkaChannel {
      */
     public Send write() throws IOException {
         Send result = null;
-        //当前 KafkaChannel 只能有一个 send待发送
+        //需要发送的请求RequestSend会绑定到KafkaChannel，所以每次只会发送一个send
         if (send != null && send(send)) {
             //返回成功发送的 send 数据
             result = send;
             //发送成功后清空当前 KafkaChannel的 send
             send = null;
         }
-        //返回已经成功发送的 send
+        //如果成功发送，则返回已经发送的Send
+        //如果发送拆包，未发送完成，则返回null
         return result;
     }
 
@@ -183,8 +188,10 @@ public class KafkaChannel {
         send.writeTo(transportLayer);
         //如果数据发送完成，移除对OP_WRITE事件的关注
         if (send.completed())
+            //客户端在组装需要发送的数据时，绑定Send后会关注OP_WRITE事件
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 
+        //返回是否完成发送，如果发生拆包则返回false
         return send.completed();
     }
 

@@ -37,14 +37,23 @@ public final class Metadata {
 
     private static final Logger log = LoggerFactory.getLogger(Metadata.class);
 
+    //元数据刷新间隔最短时间，避免频繁拉取。默认100ms
     private final long refreshBackoffMs;
+    //元数据可以被持有的最长时间。默认60min
     private final long metadataExpireMs;
+    //版本号
     private int version;
+    //最近刷新时间
     private long lastRefreshMs;
+    //最近成功刷新时间
     private long lastSuccessfulRefreshMs;
+    //表示集群中所有的节点、topic、分区信息
     private Cluster cluster;
+    //是否需要更新元数据标识
     private boolean needUpdate;
+    //集群下的所有topic集合
     private final Set<String> topics;
+    //监听器
     private final List<Listener> listeners;
     private boolean needMetadataForAllTopics;
 
@@ -175,10 +184,12 @@ public final class Metadata {
         this.needUpdate = false;
         //更新最新刷新元数据时间
         this.lastRefreshMs = now;
+        //更新上一次成功刷新元数据事件
         this.lastSuccessfulRefreshMs = now;
         //更新版本号
         this.version += 1;
 
+        //执行监听器
         for (Listener listener: listeners)
             listener.onMetadataUpdate(cluster);
 

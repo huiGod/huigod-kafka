@@ -59,7 +59,7 @@ public final class BufferPool {
 
     /**
      * Create a new buffer pool
-     * 
+     *
      * @param memory The maximum amount of memory that this buffer pool can allocate
      * @param poolableSize The buffer size to cache in the free list rather than deallocating
      * @param metrics instance of Metrics
@@ -85,14 +85,14 @@ public final class BufferPool {
     /**
      * Allocate a buffer of the given size. This method blocks if there is not enough memory and the buffer pool
      * is configured with blocking mode.
-     * 
+     *
      * @param size The buffer size to allocate in bytes
      * @param maxTimeToBlockMs The maximum time in milliseconds to block for buffer memory to be available
      * @return The buffer
      * @throws InterruptedException If the thread is interrupted while blocked
      * @throws IllegalArgumentException if size is larger than the total memory controlled by the pool (and hence we would block
      *         forever)
-     * 总的内存缓冲区大小=剩余可用缓冲区大小+BufferPool内存大小+dp 队列 batch 内存大小
+     * 总的内存缓冲区大小=剩余可用缓冲区大小+BufferPool中free内存大小+dp 队列 batch 内存大小
      */
     public ByteBuffer allocate(int size, long maxTimeToBlockMs) throws InterruptedException {
         //需要分配的内存大小大于总的缓冲区大小则抛异常
@@ -106,21 +106,24 @@ public final class BufferPool {
         this.lock.lock();
         try {
             // check if we have a free buffer of the right size pooled
-            //如果需要申请的内存大小是batchSize，并且BufferPool有内存，直接复用
+            //如果需要申请的内存大小是batchSize，并且BufferPool中的free空闲链表有可用使用的内存块，直接复用
             if (size == poolableSize && !this.free.isEmpty())
                 return this.free.pollFirst();
 
+            //否则可能是需要申请的size不符合batchSize，或者free链表为空没有足够的内存块
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
-            //计算BufferPool内存大小
+            //计算BufferPool中free空闲内存大小
             int freeListSize = this.free.size() * this.poolableSize;
-            //缓冲区剩余可使用内存大小+BufferPool内存大小=可分配总的缓冲区>需要分配的 size 内存大小
+            //缓冲区剩余可使用内存大小+BufferPool中free空闲内存大小=可分配总的缓冲区>需要分配的 size 内存大小
             if (this.availableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request
                 //确保内存空间足够分配 size 内存大小
+                //如果availableMemory大小不足以分配给指定size大小，则从free中释放空间给到availableMemory
+                //直到availableMemory足够分配size大小为止
                 freeUp(size);
-                //计算剩余可用内存空间
+                //availableMemory可用空间进行分配
                 this.availableMemory -= size;
                 lock.unlock();
                 //通过 nio 分配堆内存
@@ -137,12 +140,13 @@ public final class BufferPool {
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
+                //循环等待直到有足够的内存释放出来
                 while (accumulated < size) {
                     long startWaitNs = time.nanoseconds();
                     long timeNs;
                     boolean waitingTimeElapsed;
                     try {
-                        //阻塞等待有 batch 被发送成功，内存清空后会通知此处唤醒
+                        //阻塞等待有 batch 被发送成功，内存释放后会通知此处唤醒
                         waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException e) {
                         this.waiters.remove(moreMemory);
@@ -162,13 +166,14 @@ public final class BufferPool {
                     // check if we can satisfy this request from the free list,
                     // otherwise allocate memory
 
-                    //如果 batch 释放后，对应BufferPool内存大小有可复用的内存空间，则直接使用
+                    //如果 batch 释放后，对应BufferPool中free内存大小有可复用的内存空间，则直接使用
                     //否则进行内存直接分配
                     if (accumulated == 0 && size == this.poolableSize && !this.free.isEmpty()) {
                         // just grab a buffer from the free list
                         buffer = this.free.pollFirst();
                         accumulated = size;
                     } else {
+                        //否则直接从availableMemory中分配
                         // we'll need to allocate memory, but we may only get
                         // part of what we need on this iteration
                         freeUp(size - accumulated);
@@ -186,12 +191,14 @@ public final class BufferPool {
 
                 // signal any additional waiters if there is more memory left
                 // over for them
+                //如果有多余的内存空间，则继续唤醒分配
                 if (this.availableMemory > 0 || !this.free.isEmpty()) {
                     if (!this.waiters.isEmpty())
                         this.waiters.peekFirst().signal();
                 }
 
                 // unlock and return the buffer
+                //如果从free中复用的内存直接使用即可，否则需要重新分配
                 lock.unlock();
                 if (buffer == null)
                     return ByteBuffer.allocate(size);
@@ -217,7 +224,7 @@ public final class BufferPool {
     /**
      * Return buffers to the pool. If they are of the poolable size add them to the free list, otherwise just mark the
      * memory as free.
-     * 
+     *
      * @param buffer The buffer to return
      * @param size The size of the buffer to mark as deallocated, note that this maybe smaller than buffer.capacity
      *             since the buffer may re-allocate itself during in-place compression

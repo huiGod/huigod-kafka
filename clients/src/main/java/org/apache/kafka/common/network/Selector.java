@@ -219,6 +219,7 @@ public class Selector implements Selectable {
         //将连接缓存
         this.channels.put(id, channel);
 
+        //连接可能直接成功，取消关注的事件即可
         if (connected) {
             // OP_CONNECT won't trigger for immediately connected channels
             log.debug("Immediately connected to node {}", channel.id());
@@ -269,7 +270,7 @@ public class Selector implements Selectable {
      * @param send The request to send
      */
     public void send(Send send) {
-        //获取 broker 连接对应的 channel
+        //获取 broker 连接对应的 channel，Selector组件维护所有的channel
         KafkaChannel channel = channelOrFail(send.destination());
         try {
             //将需要发送的数据跟 channel 所绑定
@@ -310,7 +311,7 @@ public class Selector implements Selectable {
         if (timeout < 0)
             throw new IllegalArgumentException("timeout should be >= 0");
 
-        //清空队列
+        //清空队列，对IO操作中间的队列数据结构清理
         clear();
 
         if (hasStagedReceives() || !immediatelyConnectedKeys.isEmpty())
@@ -324,18 +325,19 @@ public class Selector implements Selectable {
         currentTimeNanos = endSelect;
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
 
-        //如果有任一个socketChannel有 IO 读写时间发生
+        //如果有任一个socketChannel有 IO 读写事件发生，则readyKeys>0
         if (readyKeys > 0 || !immediatelyConnectedKeys.isEmpty()) {
             //处理IO 读写事件具体逻辑
             pollSelectionKeys(this.nioSelector.selectedKeys(), false);
             pollSelectionKeys(immediatelyConnectedKeys, true);
         }
 
-        //将stagedReceives队列中的部分数据放入到completedReceives队列中
+        //将每个KafkaChannel接受到的第一个完整响应数据从stagedReceives队列中放入到completedReceives队列中
         addToCompletedReceives();
 
         long endIo = time.nanoseconds();
         this.sensors.ioTime.record(endIo - endSelect, time.milliseconds());
+        //通过lru关闭空间时间较长的连接
         maybeCloseOldestConnection();
     }
 
@@ -368,7 +370,7 @@ public class Selector implements Selectable {
             // register all per-connection metrics at once
             sensors.maybeRegisterConnectionMetrics(channel.id());
             //保存连接-->发生事件时的时间
-            //lruConnections，因为一般来说一个客户端不能放太多的Socket连接资源，否则会导致这个客户端的复杂过重，
+            //lruConnections，因为一般来说一个客户端不能放太多的Socket连接资源，否则会导致这个客户端的负载过重，
             //所以他需要采用lru的方式来不断的淘汰掉最近最少使用的一些连接，很多连接最近没怎么发送消息
             lruConnections.put(channel.id(), currentTimeNanos);
 
@@ -380,9 +382,12 @@ public class Selector implements Selectable {
                     //调用到KafkaChannel最底层的SocketChannel的finishConnect方法，等待这个连接必须执行完毕
                     //连接创建成功，取消关注OP_CONNECT事件，并且关注OP_READ事件
                     if (channel.finishConnect()) {
+                        //维护所有已经创建好连接的id
                         this.connected.add(channel.id());
                         this.sensors.connectionCreated.record();
                     } else
+                        //因为是非阻塞IO，如果连接未成功创建好，则在下一次select会继续连接的创建
+                        //也可以同步等待，上一步对finishConnect进行while等待直到连接创建好
                         continue;
                 }
 
@@ -392,12 +397,13 @@ public class Selector implements Selectable {
 
                 /* if channel is ready read from any connections that have readable data */
                 //处理网络读事件（接收请求）
+                //如果已经读取了完整消息networkReceive，会放入到channel下的stagedReceives队列，后续需要stagedReceives队列处理完成才能继续读取下一个响应数据
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     //一个 broker 可以通过一个连接连续发送出去多个请求，这些请求可能都没有收到响应消息，此时 broker 端可能会连续处理完
                     //多个请求然后连续返回多个响应，所以这里通过 while 循环连续不断的读响应数据
                     while ((networkReceive = channel.read()) != null)
-                        //将发送出去的消息放入到stagedReceives队列
+                        //将读取到的完整消息放入到channel对应的stagedReceives队列
                         addToStagedReceives(channel, networkReceive);
                 }
 
@@ -432,6 +438,7 @@ public class Selector implements Selectable {
                     log.warn("Unexpected error from {}; closing connection", desc, e);
                 //读写任何异常（包括超时），都会关闭连接，释放各种资源。后续会更新拉取元数据标识
                 close(channel);
+                //需要关闭的连接添加到队列中
                 this.disconnected.add(channel.id());
             }
         }
@@ -655,6 +662,7 @@ public class Selector implements Selectable {
                     NetworkReceive networkReceive = deque.poll();
                     this.completedReceives.add(networkReceive);
                     this.sensors.recordBytesReceived(channel.id(), networkReceive.payload().limit());
+                    //当队列为空会删除队列，只有删除了在poll中该channel才会继续读取数据
                     if (deque.isEmpty())
                         iter.remove();
                 }

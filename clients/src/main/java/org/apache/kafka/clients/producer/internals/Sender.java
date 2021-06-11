@@ -189,7 +189,7 @@ public class Sender implements Runnable {
             //判断 Broker连接是否准备好并且可以发送数据
             //底层逻辑会有write发送数据时的拆包判断，如果发现拆包则返回 false，不会继续发送后续 ClientRequest请求，但是此时仍然关注着OP_WRITE事件，底层网络 IO 会继续发送剩余数据
             if (!this.client.ready(node, now)) {
-                //剔除未准备好要发送数据的 broker
+                //剔除未准备好要发送数据的Node
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.connectionDelay(node, now));
             }
@@ -201,6 +201,8 @@ public class Sender implements Runnable {
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,
                                                                          now);
+
+        //如果需要保证消息有序（max.in.flight.requests.per.connection=1）,则在batch未从InFlightRequests队列删除前禁止发送新的消息数据
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
             for (List<RecordBatch> batchList : batches.values()) {
@@ -228,7 +230,7 @@ public class Sender implements Runnable {
             log.trace("Created {} produce requests: {}", requests.size(), requests);
             pollTimeout = 0;
         }
-        //通过 nio对每个 broker  都发送ClientRequest数据
+        //将ClientRequest绑定到broker所对应的channel网络连接，并且关注OP_WRITE事件
         for (ClientRequest request : requests)
             client.send(request, now);
 
@@ -270,6 +272,7 @@ public class Sender implements Runnable {
             log.trace("Cancelled request {} due to node {} being disconnected", response, response.request()
                                                                                                   .request()
                                                                                                   .destination());
+            //回调请求中的每个batch
             for (RecordBatch batch : batches.values())
                 completeBatch(batch, Errors.NETWORK_EXCEPTION, -1L, Record.NO_TIMESTAMP, correlationId, now);
         } else {
@@ -372,11 +375,12 @@ public class Sender implements Runnable {
             produceRecordsByPartition.put(tp, batch.records.buffer());
             recordsByPartition.put(tp, batch);
         }
+        //封装网络请求
         ProduceRequest request = new ProduceRequest(acks, timeout, produceRecordsByPartition);
         RequestSend send = new RequestSend(Integer.toString(destination),
                                            this.client.nextRequestHeader(ApiKeys.PRODUCE),
                                            request.toStruct());
-        //一个ClientRequest会有对应的一个callback
+        //一个ClientRequest会有对应的一个callback，网络请求响应后会执行该回调
         RequestCompletionHandler callback = new RequestCompletionHandler() {
             public void onComplete(ClientResponse response) {
                 handleProduceResponse(response, recordsByPartition, time.milliseconds());
