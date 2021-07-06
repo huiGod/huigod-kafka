@@ -272,10 +272,11 @@ class Partition(val topic: String,
         case Some(leaderReplica) =>
           val replica = getReplica(replicaId).get
           val leaderHW = leaderReplica.highWatermark
+          //如果replica不在ISR中，并且follower LEO 大于 leader HW
           if(!inSyncReplicas.contains(replica) &&
              assignedReplicas.map(_.brokerId).contains(replicaId) &&
                   replica.logEndOffset.offsetDiff(leaderHW) >= 0) {
-            //如果 follower LEO 大于 leader HW，则更新 ISR 和leader HW
+            //则将replica加入到ISR中
             val newInSyncReplicas = inSyncReplicas + replica
             info("Expanding ISR for partition [%s,%d] from %s to %s"
                          .format(topic, partitionId, inSyncReplicas.map(_.brokerId).mkString(","),
@@ -287,6 +288,7 @@ class Partition(val topic: String,
 
           // check if the HW of the partition can now be incremented
           // since the replica maybe now be in the ISR and its LEO has just incremented
+          //判断是否更新leader HW（与多个follower最小LEO比较）
           maybeIncrementLeaderHW(leaderReplica)
 
         case None => false // nothing to do if no longer leader
@@ -360,6 +362,8 @@ class Partition(val topic: String,
     //目前 leader replica 的 HW
     val oldHighWatermark = leaderReplica.highWatermark
     //判断是否需要更新 leader replica 的 HW
+    //1.如果ISR列表中所有副本的LEO都大于当前leader的HW，则更新
+    //2.如果leader的HW已经在旧的segment则更新
     if (oldHighWatermark.messageOffset < newHighWatermark.messageOffset || oldHighWatermark.onOlderSegment(newHighWatermark)) {
       leaderReplica.highWatermark = newHighWatermark
       debug("High watermark for partition [%s,%d] updated to %s".format(topic, partitionId, newHighWatermark))
@@ -388,11 +392,13 @@ class Partition(val topic: String,
           //获取同步慢的 replica
           val outOfSyncReplicas = getOutOfSyncReplicas(leaderReplica, replicaMaxLagTimeMs)
           if(outOfSyncReplicas.size > 0) {
+            //从ISR中移除同步慢的replica
             val newInSyncReplicas = inSyncReplicas -- outOfSyncReplicas
             assert(newInSyncReplicas.size > 0)
             info("Shrinking ISR for partition [%s,%d] from %s to %s".format(topic, partitionId,
               inSyncReplicas.map(_.brokerId).mkString(","), newInSyncReplicas.map(_.brokerId).mkString(",")))
             // update ISR in zk and in cache
+            //更新新的ISR列表到zk和本地缓存
             updateIsr(newInSyncReplicas)
             // we may need to increment high watermark since ISR could be down to 1
 
@@ -456,13 +462,14 @@ class Partition(val topic: String,
           //获取分区对应的 Log
           val log = leaderReplica.log.get
 
-          //配置定义的，表示 isr 中至少有多少个 replica
+          //配置定义的，表示 isr 中至少有多少个 replica。默认min.insync.replicas=1
           //如果配置为2，表示必须有一个 leader 和一个 follower
           val minIsr = log.config.minInSyncReplicas
           val inSyncSize = inSyncReplicas.size
 
           // Avoid writing to leader if there are not enough insync replicas to make it safe
-          //如果当前 isr 消息所配置数，并且 ack 是-1，则抛错
+          //如果当前 isr 列表数小于所配置最小isr数，并且 ack 是-1，则抛错
+          //也就是没有足够的副本数来保证消息的可靠性
           if (inSyncSize < minIsr && requiredAcks == -1) {
             throw new NotEnoughReplicasException("Number of insync replicas for partition [%s,%d] is [%d], below required minimum [%d]"
               .format(topic, partitionId, inSyncSize, minIsr))

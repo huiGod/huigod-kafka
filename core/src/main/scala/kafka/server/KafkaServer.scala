@@ -177,6 +177,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
         kafkaScheduler.startup()
 
         /* setup zookeeper */
+        //在zk中创建broker所需要的多个持久节点
         zkUtils = initZk()
 
         /* start log manager */

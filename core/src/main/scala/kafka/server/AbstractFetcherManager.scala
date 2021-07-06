@@ -74,8 +74,8 @@ abstract class AbstractFetcherManager(protected val name: String, clientId: Stri
   def addFetcherForPartitions(partitionAndOffsets: Map[TopicAndPartition, BrokerAndInitialOffset]) {
     mapLock synchronized {
 
-      //follower partition 的拉取请求，根据 leader 所在broker+计算的 fetcherId进行分组
-      //后续会对同一个 broker 的请求进行一次性组装
+      //为一批follower partition创建ReplicaFetcherThread
+      //默认配置的规则是，对同一个broker上的使用1个Fetch线程
       val partitionsPerFetcher = partitionAndOffsets.groupBy{ case(topicAndPartition, brokerAndInitialOffset) =>
         BrokerAndFetcherId(brokerAndInitialOffset.broker, getFetcherId(topicAndPartition.topic, topicAndPartition.partition))}
       for ((brokerAndFetcherId, partitionAndOffsets) <- partitionsPerFetcher) {
@@ -89,6 +89,7 @@ abstract class AbstractFetcherManager(protected val name: String, clientId: Stri
             fetcherThread.start
         }
 
+        //一个fetcher线程负责处理向同一个broker发送多个leader partition的fetch请求
         fetcherThreadMap(brokerAndFetcherId).addPartitions(partitionAndOffsets.map { case (topicAndPartition, brokerAndInitOffset) =>
           topicAndPartition -> brokerAndInitOffset.initOffset
         })

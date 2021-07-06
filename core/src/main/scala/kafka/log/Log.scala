@@ -403,7 +403,7 @@ class Log(val dir: File,
           .format(this.name, appendInfo.firstOffset, nextOffsetMetadata.messageOffset, validMessages))
 
         //os cache flush 磁盘
-        //距离上次 flush 后，通过与 LEO 计算，未 flush 消息的数量超过所配置（默认10000）后强制 flush
+        //距离上次 flush 后，通过与 LEO 计算，未 flush 消息的数量超过所配置（flush.messages默认10000）后强制 flush
         if (unflushedMessages >= config.flushInterval)
           flush()
 
@@ -520,6 +520,7 @@ class Log(val dir: File,
     var entry = segments.floorEntry(startOffset)
 
     // attempt to read beyond the log end offset is an error
+    // 拉取的数据大于当前LEO或者segment为空
     if(startOffset > next || entry == null)
       throw new OffsetOutOfRangeException("Request for offset %d but we only have log segments in the range %d to %d.".format(startOffset, segments.firstKey, next))
 
@@ -629,6 +630,11 @@ class Log(val dir: File,
    * <li> The index is full
    * </ol>
    * @return The currently active segment after (perhaps) rolling to a new segment
+   * 三种情况会创建新的segment文件：
+   * 1. 当前segment文件容量满，默认是1G
+   * 2. 超过一定时间，需要新建segment文件，默认1小时
+   * 3. 对应的index文件满
+
    */
   private def maybeRoll(messagesSize: Int): LogSegment = {
     val segment = activeSegment
@@ -694,6 +700,7 @@ class Log(val dir: File,
         throw new KafkaException("Trying to roll a new log segment for topic partition %s with start offset %d while it already exists.".format(name, newOffset))
       // We need to update the segment base offset and append position data of the metadata when log rolls.
       // The next offset should not change.
+      //更新LEO
       updateLogEndOffset(nextOffsetMetadata.messageOffset)
       // schedule an asynchronous flush of the old segment
       scheduler.schedule("flush-log", () => flush(newOffset), delay = 0L)

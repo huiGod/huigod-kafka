@@ -91,7 +91,7 @@ abstract class AbstractFetcherThread(name: String,
   override def doWork() {
 
     val fetchRequest = inLock(partitionMapLock) {
-      //针对 leader 在同一个 broker 上的多个 follower partiton 构建一个 fetchRequest
+      //这里的partitionMap一定是leader partition属于同一个broker的分区
       val fetchRequest = buildFetchRequest(partitionMap)
       if (fetchRequest.isEmpty) {
         trace("There are no active partitions. Back off for %d ms before sending a fetch request".format(fetchBackOffMs))
@@ -134,6 +134,7 @@ abstract class AbstractFetcherThread(name: String,
           val TopicAndPartition(topic, partitionId) = topicAndPartition
           partitionMap.get(topicAndPartition).foreach(currentPartitionFetchState =>
             // we append to the log if the current offset is defined and it is the same as the offset requested during fetch
+            //如果此时的offset与发送fetch请求时的offset相同则可以将响应数据写入log
             if (fetchRequest.offset(topicAndPartition) == currentPartitionFetchState.offset) {
               Errors.forCode(partitionData.errorCode) match {
                 case Errors.NONE =>
@@ -144,6 +145,7 @@ abstract class AbstractFetcherThread(name: String,
                       case Some(m: MessageAndOffset) => m.nextOffset
                       case None => currentPartitionFetchState.offset
                     }
+                    //更新分区所对应的fetch offset
                     partitionMap.put(topicAndPartition, new PartitionFetchState(newOffset))
                     fetcherLagStats.getAndMaybePut(topic, partitionId).lag = Math.max(0L, partitionData.highWatermark - newOffset)
                     fetcherStats.byteRate.mark(validBytes)

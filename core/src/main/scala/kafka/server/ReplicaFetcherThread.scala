@@ -128,7 +128,7 @@ class ReplicaFetcherThread(name: String,
         trace("Follower %d has replica log end offset %d after appending %d bytes of messages for partition %s"
           .format(replica.brokerId, replica.logEndOffset.messageOffset, messageSet.sizeInBytes, topicAndPartition))
       //计算 replica的 HW的逻辑，fetch 响应数据中会包含 leader partition 的 HW
-      //跟当前 replica 同步数据后的 LEO 比较取较小值作为 HW
+      //当前LEO与leader partition响应的HW取较小值作为当前follower的HW
       val followerHighWatermark = replica.logEndOffset.messageOffset.min(partitionData.highWatermark)
       // for the follower replica, we do not need to keep
       // its segment base offset the physical position,
@@ -239,6 +239,7 @@ class ReplicaFetcherThread(name: String,
 
   private def sendRequest(apiKey: ApiKeys, apiVersion: Option[Short], request: AbstractRequest): ClientResponse = {
     import kafka.utils.NetworkClientBlockingOps._
+    //封装请求header
     val header = apiVersion.fold(networkClient.nextRequestHeader(apiKey))(networkClient.nextRequestHeader(apiKey, _))
     try {
       //阻塞等待连接是否就绪
@@ -248,6 +249,7 @@ class ReplicaFetcherThread(name: String,
         //封装需要发送的消息
         val send = new RequestSend(sourceBroker.id.toString, header, request.toStruct)
         val clientRequest = new ClientRequest(time.milliseconds(), true, send, null)
+        //阻塞等待响应数据
         networkClient.blockingSendAndReceive(clientRequest)(time)
       }
     }
@@ -279,7 +281,7 @@ class ReplicaFetcherThread(name: String,
 
     partitionMap.foreach { case ((TopicAndPartition(topic, partition), partitionFetchState)) =>
       if (partitionFetchState.isActive)
-        //从 leader partition 拉取数据的时候，每个分区需要指定拉取的起始 offset，以及拉取的数据量大小replica.fetch.max.bytes=1M
+        //从 leader partition 拉取数据的时候，每个分区需要指定拉取的起始 offset，以及拉取的数据量最大大小replica.fetch.max.bytes=1M
         requestMap(new TopicPartition(topic, partition)) = new JFetchRequest.PartitionData(partitionFetchState.offset, fetchSize)
     }
 

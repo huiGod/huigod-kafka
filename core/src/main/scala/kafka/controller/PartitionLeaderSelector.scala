@@ -80,10 +80,12 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
                 val newLeader = liveAssignedReplicas.head
                 warn("No broker in ISR is alive for %s. Elect leader %d from live brokers %s. There's potential data loss."
                      .format(topicAndPartition, newLeader, liveAssignedReplicas.mkString(",")))
+                //如果ISR集合中没有可用的副本，那么此时还要再检查一下所配置的unclean.leader.election.enable参数（默认值为false）。如果这个参数配置为true，那么表示允许从非ISR列表中的选举leader，从AR列表中找到第一个存活的副本即为leader
                 new LeaderAndIsr(newLeader, currentLeaderEpoch + 1, List(newLeader), currentLeaderIsrZkPathVersion + 1)
             }
           case false =>
             val liveReplicasInIsr = liveAssignedReplicas.filter(r => liveBrokersInIsr.contains(r))
+            //按照 AR集合中副本的顺序查找第一个存活的副本，并且这个副本在ISR集合中
             val newLeader = liveReplicasInIsr.head
             debug("Some broker in ISR is alive for %s. Select %d from ISR %s to be the leader."
                   .format(topicAndPartition, newLeader, liveBrokersInIsr.mkString(",")))

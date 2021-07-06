@@ -123,7 +123,7 @@ class ReplicaManager(val config: KafkaConfig,
 
   //每个 leader 写入了一条消息，leader partition 的 LEO 会推进一位
   //但是必须等到所有的 follower 都同步了这条消息，partition 的 HW 才能整体推进一位
-  //消费者只能督导 HW 高水位以下的消息
+  //消费者只能读到 HW 高水位以下的消息
   private val highWatermarkCheckPointThreadStarted = new AtomicBoolean(false)
   val highWatermarkCheckpoints = config.logDirs.map(dir => (new File(dir).getAbsolutePath, new OffsetCheckpoint(new File(dir, ReplicaManager.HighWatermarkFilename)))).toMap
   private var hwThreadInitialized = false
@@ -234,7 +234,7 @@ class ReplicaManager(val config: KafkaConfig,
 
   def startup() {
     // start ISR expiration thread
-    //后台线程检测是否需要将 replica 从 ISR 列表中移除
+    //后台线程检测是否需要将 replica 从 ISR 列表中移除，replica.lag.time.max.ms默认10000
     scheduler.schedule("isr-expiration", maybeShrinkIsr, period = config.replicaLagTimeMaxMs, unit = TimeUnit.MILLISECONDS)
     scheduler.schedule("isr-change-propagation", maybePropagateIsrChanges, period = 2500L, unit = TimeUnit.MILLISECONDS)
   }
@@ -553,7 +553,7 @@ class ReplicaManager(val config: KafkaConfig,
 
   /**
    * Read from a single topic/partition at the given offset upto maxSize bytes
-   * 遍历后从每个 partition 读取指定 offset 开始的 maxSize 字节数据
+   * 从leader partition 读取指定 offset 开始的 maxSize 字节数据
    *
    */
   def readFromLocalLog(fetchOnlyFromLeader: Boolean,

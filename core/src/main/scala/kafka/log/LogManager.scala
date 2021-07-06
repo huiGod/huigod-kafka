@@ -212,17 +212,21 @@ class LogManager(val logDirs: Array[File],
     /* Schedule the cleanup task to delete old logs */
     if(scheduler != null) {
       info("Starting log cleanup with a period of %d ms.".format(retentionCheckMs))
+      //每隔log.retention.check.interval.ms（默认5分钟）执行清理任务
       scheduler.schedule("kafka-log-retention", 
                          cleanupLogs, 
                          delay = InitialTaskDelayMs, 
                          period = retentionCheckMs, 
                          TimeUnit.MILLISECONDS)
       info("Starting log flusher with a default period of %d ms.".format(flushCheckMs))
+      //每隔log.flush.scheduler.interval.ms（默认无限大，不执行）定期执行flush操作
       scheduler.schedule("kafka-log-flusher", 
                          flushDirtyLogs, 
                          delay = InitialTaskDelayMs, 
                          period = flushCheckMs, 
                          TimeUnit.MILLISECONDS)
+      //每隔log.flush.offset.checkpoint.interval.ms（默认60s）,更新分区文件夹下的recovery-point-offset-checkpoint文件，保存已经写入磁盘的offset
+      //也就是从recoveryPoint开始，还没有flush到磁盘数据
       scheduler.schedule("kafka-recovery-point-checkpoint",
                          checkpointRecoveryPointOffsets,
                          delay = InitialTaskDelayMs,
@@ -479,6 +483,8 @@ class LogManager(val logDirs: Array[File],
     val startMs = time.milliseconds
     for(log <- allLogs; if !log.config.compact) {
       debug("Garbage collecting '" + log.name + "'")
+      //删除超过retention.ms（默认7天）的segment文件
+      //删除容量超过retention.bytes（默认-1不限制）的segment文件
       total += cleanupExpiredSegments(log) + cleanupSegmentsToMaintainSize(log)
     }
     debug("Log cleanup completed. " + total + " files deleted in " +

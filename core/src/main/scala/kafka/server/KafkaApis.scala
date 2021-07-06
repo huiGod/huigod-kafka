@@ -357,6 +357,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
 
       //响应最终会执行该回调
+      //不管acks配置的值是多少，都会封装为Response放入到对应的队列中
       def produceResponseCallback(delayTimeMs: Int) {
         //依据 acks 回调不同的逻辑
         if (produceRequest.acks == 0) {
@@ -513,7 +514,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       //2.如果能够读取到，通过回调函数直接返回
       //3.后续还要考虑更新和维护 HW/ISR
       //4.无法读取新的数据需要放入时间轮延时来执行
-      //5.如果 leader 有心的数据写入，唤醒时间轮中等待的 fetchRequest 来执行数据的拉取
+      //5.如果 leader 有新的数据写入，唤醒时间轮中等待的 fetchRequest 来执行数据的拉取
       replicaManager.fetchMessages(
         fetchRequest.maxWait.toLong,
         fetchRequest.replicaId,

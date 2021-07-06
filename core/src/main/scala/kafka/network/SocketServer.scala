@@ -338,6 +338,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
 
   /*
    * Accept a new connection
+   * 接受客端连接请求（OP_ACCEPT）
    */
   def accept(key: SelectionKey, processor: Processor) {
     val serverSocketChannel = key.channel().asInstanceOf[ServerSocketChannel]
@@ -444,10 +445,11 @@ private[kafka] class Processor(val id: Int,
         //KafkaRequestHandlerPool线程池处理完请求后，会把响应放入每个 Processor 对应的一个响应队列responseQueues里，Processor 在这里会从响应队列获取响应然后发送给客户端
         processNewResponses()
         //处理IO操作，调用 Selector 监听各个 SocketChannel 是否有请求可以进行处理
+        //复用客户端使用的多路复用器Selector
         poll()
         //对已经接收完毕的请求处理
         processCompletedReceives()
-        //对需要发送的数据进行处理
+        //对已发送完成的数据进行处理
         processCompletedSends()
         //处理断开的连接
         processDisconnected()
@@ -490,6 +492,7 @@ private[kafka] class Processor(val id: Int,
             close(selector, curr.request.connectionId)
         }
       } finally {
+        //继续获取待发送队列的下一个数据
         curr = requestChannel.receiveResponse(id)
       }
     }
@@ -505,7 +508,9 @@ private[kafka] class Processor(val id: Int,
       response.request.updateRequestMetrics()
     }
     else {
+      //复用客户端使用的多路复用器Selector
       selector.send(response.responseSend)
+      //保存发送给客户端的响应数据
       inflightResponses += (response.request.connectionId -> response)
     }
   }
@@ -587,7 +592,7 @@ private[kafka] class Processor(val id: Int,
    * Register any new connections that have been queued up
    */
   private def configureNewConnections() {
-    //如果newConnections队列不为空，则poll出所有SocketChannel连接注册到selector，并且关注OP_READ事件
+    //处理客户端发起的创建连接请求
     while (!newConnections.isEmpty) {
       val channel = newConnections.poll()
       try {
@@ -599,6 +604,7 @@ private[kafka] class Processor(val id: Int,
         //客户端连接id
         val connectionId = ConnectionId(localHost, localPort, remoteHost, remotePort).toString
         //创建的连接会在Map<String, KafkaChannel> channels中维护
+        //注册到多路复用器上，并且关注OP_READ事件
         selector.register(connectionId, channel)
       } catch {
         // We explicitly catch all non fatal exceptions and close the socket to avoid a socket leak. The other

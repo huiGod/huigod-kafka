@@ -83,7 +83,7 @@ class LogSegment(val log: FileMessageSet,
     if (messages.sizeInBytes > 0) {
       trace("Inserting %d bytes at offset %d at position %d".format(messages.sizeInBytes, offset, log.sizeInBytes()))
       // append an entry to the index (if needed)
-      //没当写入的消息字节数大于所配置的4096字节数，则写入一条稀疏索引
+      //每当写入的消息字节数大于所配置的4096字节数，则写入一条稀疏索引
       if(bytesSinceLastIndexEntry > indexIntervalBytes) {
         //写入逻辑 offset-->数据物理存储位置（log 一直在写入数据，因此总的字节数会对应递增，也就是磁盘所在的物理位置）
         index.append(offset, log.sizeInBytes())
@@ -155,6 +155,7 @@ class LogSegment(val log: FileMessageSet,
     val length = maxOffset match {
       case None =>
         // no max offset, just read until the max position
+        //默认fetch的数据量，如果未限制，则会拉取起始offset到segment末尾的数据
         min((maxPosition - startPosition.position).toInt, maxSize)
       case Some(offset) =>
         // there is a max offset, translate it to a file position and use that to calculate the max read size;
@@ -172,7 +173,7 @@ class LogSegment(val log: FileMessageSet,
         min(min(maxPosition, endPosition) - startPosition.position, maxSize).toInt
     }
 
-    //封装响应的数据
+    //起始物理position和结束物理position来封装响应的数据
     FetchDataInfo(offsetMetadata, log.read(startPosition.position, length))
   }
 
