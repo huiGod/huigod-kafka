@@ -169,21 +169,23 @@ public final class RecordAccumulator {
         appendsInProgress.incrementAndGet();
         try {
             // check if we have an in-progress batch
-            //从内存缓冲区获取一个分区对应的 Deque队列，队列中存放多个 batch
+            //根据TopicPartition获取or创建消息对应的双端队列Deque<ProducerBatch>,并与其进行关联
             Deque<RecordBatch> dq = getOrCreateDeque(tp);
-            //对每个分区所对应的队列进行加锁后操作
+            //保证多线程情况下，同一 topic 相同分区的消息能够顺序写入
+            //这样就保证了同一分区的消息在客户端 buffer 中是有序的
             synchronized (dq) {
                 if (closed)
                     throw new IllegalStateException("Cannot send after the producer is closed.");
-                //尝试将消息写入队列最近一个 batch 中，如果返回 null 则写入失败（dq 队列 batch 为空或者 batch 空间不足）
+                //尝试将消息写入队列队尾的 RecordBatch 中，如果返回 null 则写入失败（dq 队列 RecordBatch 为空或者 RecordBatch 空间不足）
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
                 //如果写入batch成功直接返回
                 if (appendResult != null)
                     return appendResult;
             }
 
+            //若上述尝试append消息失败,即返回null,此时需要向BufferPool申请空间用于创建新的ProducerBatch对象
+
             // we don't have an in-progress record batch try to allocate a new batch
-            //队列中没有 batch 存在，则申请batch内存缓冲区
             //取消息大小和batchSize(默认16KB)较大值作为要申请的内存空间大小
             //需要对 request.max.size 和 batch.size 进行调优，否则一个 batch 就是一条消息，每条消息都对应一次网络请求，batch 打包机制就没有意义
             int size = Math.max(this.batchSize, Records.LOG_OVERHEAD + Record.recordSize(key, value));
@@ -193,7 +195,7 @@ public final class RecordAccumulator {
             //并发问题：
             //对于同一个 topic的dq队列，在队列为空或者空间不足，多个线程可能会并发申请到 ByteBuffer
             //但是进入到同步块后，第一个线程会基于ByteBuffer创建一个 batch 放入到dq队列中
-            //后续线程再次进入到同步块，会将消息直接放入到dq队列中的最近一个 batch，并且释放自己所申请的ByteBuffer内存，放回到缓冲池队列中供复用
+            //后续线程再次进入到同步块，会将消息直接放入到dq队列队尾 batch，并且释放自己所申请的ByteBuffer内存，放回到缓冲池队列中供复用
             synchronized (dq) {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)

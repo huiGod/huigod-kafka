@@ -189,6 +189,7 @@ public class KafkaChannel {
         //如果数据发送完成，移除对OP_WRITE事件的关注
         if (send.completed())
             //客户端在组装需要发送的数据时，绑定Send后会关注OP_WRITE事件
+            //这里是数据发送完成后，移除 OP_WRITE 事件
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 
         //返回是否完成发送，如果发生拆包则返回false
